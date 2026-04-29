@@ -11,11 +11,13 @@ try:
     from scripts.visual_anchor import find_coordinates
     from scripts.analytics import generate_3d_network_graph
     from scripts.database_manager import commit_to_knowledge_base
+    from scripts.query_engine import ask_document
 except ImportError:
     sys.path.append(str(Path(__file__).resolve().parent))
     from scripts.visual_anchor import find_coordinates
     from scripts.analytics import generate_3d_network_graph
     from scripts.database_manager import commit_to_knowledge_base
+    from scripts.query_engine import ask_document
 
 # Custom Script Imports
 from scripts.processor import process_new_pdf
@@ -43,7 +45,7 @@ RAW_PDF_DIR.mkdir(parents=True, exist_ok=True)
 JSON_MAP_DIR.mkdir(parents=True, exist_ok=True)
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
-# --- API CLIENTS (cached for performance) ---
+# --- API CLIENTS (cached) ---
 @st.cache_resource
 def get_openai_client():
     return OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -55,44 +57,42 @@ def get_pinecone_index():
 
 st.title("LeaseSight: Dynamic Visual Auditor")
 
-# Initialize Session States
-if 'audit_results' not in st.session_state:
-    st.session_state['audit_results'] = None
-if 'annotations' not in st.session_state:
-    st.session_state['annotations'] = []
-if 'current_vector' not in st.session_state:
-    st.session_state['current_vector'] = None
-if 'vector_ids' not in st.session_state:
-    st.session_state['vector_ids'] = []
-if 'committed' not in st.session_state:
-    st.session_state['committed'] = False
-if 'source_path' not in st.session_state:
-    st.session_state['source_path'] = None
+# --- SESSION STATE INITIALIZATION ---
+defaults = {
+    'audit_results': None,
+    'annotations': [],
+    'current_vector': None,
+    'vector_ids': [],
+    'committed': False,
+    'source_path': None,
+    'confirm_commit': False,
+    'messages': [],       # Chat history
+    'pdf_page': None,     # Auto-scroll target page
+}
+for key, val in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = val
 
 
-# --- HELPER: FETCH ARCHIVE VECTORS FOR 3D GRAPH ---
+# --- HELPER: FETCH ARCHIVE VECTORS ---
 def fetch_archive_vectors(current_doc_name, sample_size=100):
-    """Fetches a representative sample of archive vectors from Pinecone."""
     try:
         idx = get_pinecone_index()
         current_vec = st.session_state.get('current_vector')
         if not current_vec:
             return [], []
-
         results = idx.query(
             vector=current_vec, top_k=sample_size,
             include_values=True, include_metadata=True,
         )
-
-        vectors, names, seen_files = [], [], set()
+        vectors, names, seen = [], [], set()
         for match in results.get('matches', []):
-            file_name = match.get('metadata', {}).get('file_name', 'Unknown')
-            if file_name == current_doc_name:
+            fn = match.get('metadata', {}).get('file_name', 'Unknown')
+            if fn == current_doc_name or fn in seen:
                 continue
-            if file_name not in seen_files:
-                seen_files.add(file_name)
-                vectors.append(match['values'])
-                names.append(file_name)
+            seen.add(fn)
+            vectors.append(match['values'])
+            names.append(fn)
         return vectors, names
     except Exception as e:
         print(f"Error fetching archive vectors: {e}")
@@ -101,43 +101,35 @@ def fetch_archive_vectors(current_doc_name, sample_size=100):
 
 # --- DYNAMIC UI RENDERER ---
 def render_dynamic_audit(summary_data, selected_doc):
-    """
-    Renders findings, Judge warnings, Executive Brief, and Locate buttons.
-    """
     if not summary_data:
         st.warning("No data extracted yet.")
         return
 
-    # --- JUDGE WARNINGS ---
+    # Judge Warnings
     warnings = summary_data.get('warnings', [])
     if warnings:
         for w in warnings:
             st.warning(f"⚠️ {w}")
-
     risk = summary_data.get('risk_score')
     if risk and int(risk) >= 7:
         st.error(f"🚨 HIGH RISK DOCUMENT — Risk Score: {risk}/10")
 
-    # 1. Dynamic Findings Loop
+    # Findings
     st.markdown("### 📋 Key Findings")
     findings = summary_data.get('findings', [])
-
     found_any = False
     for i, finding in enumerate(findings):
         label = finding.get('label', 'Unknown Field')
         value = finding.get('value', 'Not Found')
         evidence = finding.get('evidence_quote', 'Not Found')
-
         if value and str(value).lower() != "not found":
             found_any = True
             col_label, col_input, col_btn = st.columns([1, 2, 0.5])
             with col_label:
                 st.markdown(f"**{label}**")
             with col_input:
-                st.text_input(
-                    label=label, value=value,
-                    label_visibility="collapsed", key=f"input_{i}"
-                )
+                st.text_input(label=label, value=value,
+                              label_visibility="collapsed", key=f"input_{i}")
             with col_btn:
                 if evidence and str(evidence).lower() != "not found":
                     if st.button("🔍", key=f"locate_{i}", help=f"Locate: {label}"):
@@ -153,20 +145,19 @@ def render_dynamic_audit(summary_data, selected_doc):
                                 "height": max(ys) - min(ys),
                                 "color": "red", "thickness": 2
                             }]
+                            st.session_state['pdf_page'] = int(coord_data['page'])
                             st.rerun()
                         else:
                             st.toast(f"⚠️ Could not locate '{label}' in the document map.")
-
     if not found_any:
         st.info("No core findings discovered in the provided context.")
 
-    # 2. Executive Brief
+    # Executive Brief
     st.divider()
     st.subheader("💡 Executive Brief")
-    brief = summary_data.get('summary_paragraph', "No brief available.")
-    st.info(brief)
+    st.info(summary_data.get('summary_paragraph', "No brief available."))
 
-    # --- FEATURE 5: COMMIT TO DATABASE BUTTON ---
+    # Commit Button
     st.divider()
     if st.session_state.get('committed'):
         st.success("✅ This document has been committed as a legal precedent.")
@@ -175,11 +166,10 @@ def render_dynamic_audit(summary_data, selected_doc):
         st.caption("Verify the audit above, then commit this document as a permanent legal precedent.")
         if st.button("✅ Commit to Database", key="commit_btn", type="primary"):
             st.session_state['confirm_commit'] = True
-
         if st.session_state.get('confirm_commit'):
             st.warning("⚠️ Are you sure? This will mark the document as a verified legal precedent.")
-            col_yes, col_no = st.columns(2)
-            with col_yes:
+            cy, cn = st.columns(2)
+            with cy:
                 if st.button("Yes, Commit", key="confirm_yes", type="primary"):
                     with st.spinner("Committing to knowledge base..."):
                         result = commit_to_knowledge_base(
@@ -197,13 +187,15 @@ def render_dynamic_audit(summary_data, selected_doc):
                         else:
                             st.error(f"❌ {result['message']}")
                             st.session_state['confirm_commit'] = False
-            with col_no:
+            with cn:
                 if st.button("Cancel", key="confirm_no"):
                     st.session_state['confirm_commit'] = False
                     st.rerun()
 
 
-# --- SIDEBAR: UPLOAD & SELECTION ---
+# ========================================================================
+# SIDEBAR
+# ========================================================================
 uploaded_file = st.sidebar.file_uploader("Upload a new Contract (PDF)", type="pdf")
 
 if uploaded_file:
@@ -215,32 +207,29 @@ if uploaded_file:
             process_new_pdf(str(target_path), uploaded_file.name)
             st.success("Document Indexed!")
     selected_doc = uploaded_file.name
-    # Track source path and generate vector IDs for commit
     st.session_state['source_path'] = str(target_path)
-    # Reset commit state for new uploads
     st.session_state['committed'] = False
 else:
     all_pdfs = sorted([f for f in os.listdir(RAW_PDF_DIR) if f.lower().endswith('.pdf')])
     selected_doc = st.sidebar.selectbox("Or select existing document:", all_pdfs) if all_pdfs else None
 
-# --- SIDEBAR: RISK SCORE METRIC ---
+# Risk Score Metric
 st.sidebar.divider()
 if st.session_state['audit_results']:
-    risk_score = st.session_state['audit_results'].get('risk_score', None)
-    warnings_list = st.session_state['audit_results'].get('warnings', [])
-    if risk_score is not None:
-        st.sidebar.metric(
-            label="📊 Document Risk Score",
-            value=f"{risk_score} / 10",
-            delta=f"{len(warnings_list)} warning(s)",
-            delta_color="inverse"
-        )
+    rs = st.session_state['audit_results'].get('risk_score')
+    wl = st.session_state['audit_results'].get('warnings', [])
+    if rs is not None:
+        st.sidebar.metric("📊 Document Risk Score", f"{rs} / 10",
+                          delta=f"{len(wl)} warning(s)", delta_color="inverse")
     else:
-        st.sidebar.metric(label="📊 Document Risk Score", value="N/A")
+        st.sidebar.metric("📊 Document Risk Score", "N/A")
 else:
-    st.sidebar.metric(label="📊 Document Risk Score", value="—")
+    st.sidebar.metric("📊 Document Risk Score", "—")
 
-# --- MAIN INTERFACE ---
+
+# ========================================================================
+# MAIN INTERFACE
+# ========================================================================
 col1, col2 = st.columns([1, 1])
 
 # LEFT COLUMN: Results & Interaction
@@ -248,16 +237,15 @@ with col1:
     st.subheader("📊 Extraction Results")
 
     if selected_doc and st.button("Run Intelligent Audit", key="run_audit"):
-        # Reset commit state for new audits
         st.session_state['committed'] = False
         st.session_state['confirm_commit'] = False
+        st.session_state['messages'] = []
+        st.session_state['pdf_page'] = None
 
         with st.spinner("AI Multi-Agent pipeline running (Miner → Judge → Clerk)..."):
-            # 1. Trigger Multi-Agent extraction
             results = run_full_audit(selected_doc)
             st.session_state['audit_results'] = results
 
-            # 2. Generate current document's embedding for the 3D graph
             try:
                 oai = get_openai_client()
                 emb_res = oai.embeddings.create(
@@ -269,8 +257,6 @@ with col1:
                 print(f"Error generating current vector: {e}")
                 st.session_state['current_vector'] = None
 
-            # 3. Store vector IDs for the commit step
-            #    IDs follow the pattern: {file_name}_p{page_number}
             try:
                 idx = get_pinecone_index()
                 vec = st.session_state.get('current_vector')
@@ -284,7 +270,6 @@ with col1:
             except Exception:
                 st.session_state['vector_ids'] = []
 
-            # 4. Generate Visual Anchors
             temp_annotations = []
             if results and 'findings' in results:
                 for finding in results['findings']:
@@ -312,14 +297,20 @@ with col2:
     st.subheader("📄 Document Preview")
     if selected_doc:
         pdf_path = str(RAW_PDF_DIR / selected_doc)
-        pdf_viewer(
-            pdf_path,
-            annotations=st.session_state.get('annotations', [])
-        )
+        # Build viewer kwargs — include page jump if set
+        viewer_kwargs = {
+            "annotations": st.session_state.get('annotations', []),
+        }
+        target_page = st.session_state.get('pdf_page')
+        if target_page:
+            viewer_kwargs["pages_to_render"] = [target_page]
+        pdf_viewer(pdf_path, **viewer_kwargs)
     else:
         st.info("Upload or select a document to begin.")
 
-# --- FEATURE 3: 3D SIMILARITY NETWORK GRAPH ---
+# ========================================================================
+# FEATURE 3: 3D SIMILARITY NETWORK GRAPH
+# ========================================================================
 with st.expander("📊 View Document Relationship Map", expanded=False):
     if st.session_state.get('current_vector') and selected_doc:
         with st.spinner("Building 3D similarity network..."):
@@ -338,3 +329,89 @@ with st.expander("📊 View Document Relationship Map", expanded=False):
                 st.info("Not enough documents in archive to generate a map.")
     else:
         st.info("Run an audit first to generate the document similarity map.")
+
+# ========================================================================
+# FEATURE 6: SCOPED DOCUMENT CHAT
+# ========================================================================
+st.divider()
+st.subheader("💬 Chat with Document")
+
+if not selected_doc:
+    st.info("Upload or select a document to start chatting.")
+else:
+    # Render chat history (persistent in session_state)
+    for idx, msg in enumerate(st.session_state['messages']):
+        with st.chat_message(msg['role']):
+            st.markdown(msg['content'])
+            # Show Locate button for assistant messages that have source_text
+            if msg['role'] == 'assistant' and msg.get('source_text'):
+                if st.button("📍 Locate in Document", key=f"chat_locate_{idx}"):
+                    coord_data = find_coordinates(selected_doc, msg['source_text'][:80])
+                    if coord_data:
+                        bbox = coord_data['bounding_box']
+                        xs = [p['x'] * DPI for p in bbox]
+                        ys = [p['y'] * DPI for p in bbox]
+                        # Chat highlights use orange to distinguish from red audit highlights
+                        st.session_state['annotations'] = [{
+                            "page": int(coord_data['page']),
+                            "x": min(xs), "y": min(ys),
+                            "width": max(xs) - min(xs),
+                            "height": max(ys) - min(ys),
+                            "color": "orange", "thickness": 2
+                        }]
+                        st.session_state['pdf_page'] = int(coord_data['page'])
+                        st.rerun()
+                    elif msg.get('page'):
+                        # Fallback: at least jump to the page
+                        st.session_state['pdf_page'] = msg['page']
+                        st.rerun()
+                    else:
+                        st.toast("⚠️ Could not locate the source in the document map.")
+
+    # Chat input
+    user_query = st.chat_input("Ask a question about this document...", key="chat_input")
+
+    if user_query:
+        # Add user message
+        st.session_state['messages'].append({"role": "user", "content": user_query})
+        with st.chat_message("user"):
+            st.markdown(user_query)
+
+        # Get scoped answer
+        with st.chat_message("assistant"):
+            with st.spinner("Searching document..."):
+                result = ask_document(user_query, selected_doc)
+                answer = result['answer']
+                source_text = result.get('source_text')
+                page = result.get('page')
+
+                st.markdown(answer)
+
+                # Store assistant message with source metadata for Locate button
+                st.session_state['messages'].append({
+                    "role": "assistant",
+                    "content": answer,
+                    "source_text": source_text,
+                    "page": page
+                })
+
+                # Auto-scroll: if we have source text, highlight + jump
+                if source_text:
+                    coord_data = find_coordinates(selected_doc, source_text[:80])
+                    if coord_data:
+                        bbox = coord_data['bounding_box']
+                        xs = [p['x'] * DPI for p in bbox]
+                        ys = [p['y'] * DPI for p in bbox]
+                        st.session_state['annotations'] = [{
+                            "page": int(coord_data['page']),
+                            "x": min(xs), "y": min(ys),
+                            "width": max(xs) - min(xs),
+                            "height": max(ys) - min(ys),
+                            "color": "orange", "thickness": 2
+                        }]
+                        st.session_state['pdf_page'] = int(coord_data['page'])
+                    elif page:
+                        st.session_state['pdf_page'] = page
+
+                if source_text:
+                    st.caption(f"📄 Source: Page {page or '?'}")
