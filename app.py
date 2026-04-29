@@ -6,15 +6,16 @@ import sys
 from pathlib import Path
 
 # --- IMPORT FALLBACK ---
-# Use sys.path.append fallback to solve ImportError when running outside project root
 sys.path.append(os.path.join(os.getcwd(), "scripts"))
 try:
     from scripts.visual_anchor import find_coordinates
     from scripts.analytics import generate_3d_network_graph
+    from scripts.database_manager import commit_to_knowledge_base
 except ImportError:
     sys.path.append(str(Path(__file__).resolve().parent))
     from scripts.visual_anchor import find_coordinates
     from scripts.analytics import generate_3d_network_graph
+    from scripts.database_manager import commit_to_knowledge_base
 
 # Custom Script Imports
 from scripts.processor import process_new_pdf
@@ -37,8 +38,10 @@ st.set_page_config(layout="wide", page_title="LeaseSight AI Auditor")
 BASE_DIR = Path(r"C:\Users\zain\OneDrive\Desktop\LeaseSight")
 RAW_PDF_DIR = BASE_DIR / "data" / "raw_pdfs"
 JSON_MAP_DIR = BASE_DIR / "data" / "json_maps"
+TEMP_DIR = BASE_DIR / "data" / "temp"
 RAW_PDF_DIR.mkdir(parents=True, exist_ok=True)
 JSON_MAP_DIR.mkdir(parents=True, exist_ok=True)
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- API CLIENTS (cached for performance) ---
 @st.cache_resource
@@ -59,6 +62,12 @@ if 'annotations' not in st.session_state:
     st.session_state['annotations'] = []
 if 'current_vector' not in st.session_state:
     st.session_state['current_vector'] = None
+if 'vector_ids' not in st.session_state:
+    st.session_state['vector_ids'] = []
+if 'committed' not in st.session_state:
+    st.session_state['committed'] = False
+if 'source_path' not in st.session_state:
+    st.session_state['source_path'] = None
 
 
 # --- HELPER: FETCH ARCHIVE VECTORS FOR 3D GRAPH ---
@@ -90,22 +99,21 @@ def fetch_archive_vectors(current_doc_name, sample_size=100):
         return [], []
 
 
-# --- DYNAMIC UI RENDERER (Updated for Multi-Agent output) ---
+# --- DYNAMIC UI RENDERER ---
 def render_dynamic_audit(summary_data, selected_doc):
     """
     Renders findings, Judge warnings, Executive Brief, and Locate buttons.
-    Handles the new risk_score and warnings keys gracefully.
     """
     if not summary_data:
         st.warning("No data extracted yet.")
         return
 
-    # --- JUDGE WARNINGS (Alert System) ---
+    # --- JUDGE WARNINGS ---
     warnings = summary_data.get('warnings', [])
     if warnings:
         for w in warnings:
             st.warning(f"⚠️ {w}")
-    
+
     risk = summary_data.get('risk_score')
     if risk and int(risk) >= 7:
         st.error(f"🚨 HIGH RISK DOCUMENT — Risk Score: {risk}/10")
@@ -158,6 +166,42 @@ def render_dynamic_audit(summary_data, selected_doc):
     brief = summary_data.get('summary_paragraph', "No brief available.")
     st.info(brief)
 
+    # --- FEATURE 5: COMMIT TO DATABASE BUTTON ---
+    st.divider()
+    if st.session_state.get('committed'):
+        st.success("✅ This document has been committed as a legal precedent.")
+    else:
+        st.markdown("### 📥 Commit to Knowledge Base")
+        st.caption("Verify the audit above, then commit this document as a permanent legal precedent.")
+        if st.button("✅ Commit to Database", key="commit_btn", type="primary"):
+            st.session_state['confirm_commit'] = True
+
+        if st.session_state.get('confirm_commit'):
+            st.warning("⚠️ Are you sure? This will mark the document as a verified legal precedent.")
+            col_yes, col_no = st.columns(2)
+            with col_yes:
+                if st.button("Yes, Commit", key="confirm_yes", type="primary"):
+                    with st.spinner("Committing to knowledge base..."):
+                        result = commit_to_knowledge_base(
+                            file_name=selected_doc,
+                            source_path=st.session_state.get('source_path'),
+                            dest_folder=str(RAW_PDF_DIR),
+                            vector_ids=st.session_state.get('vector_ids') or None
+                        )
+                        if result['success']:
+                            st.session_state['committed'] = True
+                            st.session_state['confirm_commit'] = False
+                            st.balloons()
+                            st.sidebar.success(f"✅ Committed! {result['vectors_updated']} vectors verified.")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {result['message']}")
+                            st.session_state['confirm_commit'] = False
+            with col_no:
+                if st.button("Cancel", key="confirm_no"):
+                    st.session_state['confirm_commit'] = False
+                    st.rerun()
+
 
 # --- SIDEBAR: UPLOAD & SELECTION ---
 uploaded_file = st.sidebar.file_uploader("Upload a new Contract (PDF)", type="pdf")
@@ -171,23 +215,25 @@ if uploaded_file:
             process_new_pdf(str(target_path), uploaded_file.name)
             st.success("Document Indexed!")
     selected_doc = uploaded_file.name
+    # Track source path and generate vector IDs for commit
+    st.session_state['source_path'] = str(target_path)
+    # Reset commit state for new uploads
+    st.session_state['committed'] = False
 else:
     all_pdfs = sorted([f for f in os.listdir(RAW_PDF_DIR) if f.lower().endswith('.pdf')])
     selected_doc = st.sidebar.selectbox("Or select existing document:", all_pdfs) if all_pdfs else None
 
 # --- SIDEBAR: RISK SCORE METRIC ---
-# Display the Judge's risk score prominently in the sidebar
 st.sidebar.divider()
 if st.session_state['audit_results']:
     risk_score = st.session_state['audit_results'].get('risk_score', None)
     warnings_list = st.session_state['audit_results'].get('warnings', [])
     if risk_score is not None:
-        delta_color = "inverse"  # Higher = worse, so red for high values
         st.sidebar.metric(
             label="📊 Document Risk Score",
             value=f"{risk_score} / 10",
             delta=f"{len(warnings_list)} warning(s)",
-            delta_color=delta_color
+            delta_color="inverse"
         )
     else:
         st.sidebar.metric(label="📊 Document Risk Score", value="N/A")
@@ -202,6 +248,10 @@ with col1:
     st.subheader("📊 Extraction Results")
 
     if selected_doc and st.button("Run Intelligent Audit", key="run_audit"):
+        # Reset commit state for new audits
+        st.session_state['committed'] = False
+        st.session_state['confirm_commit'] = False
+
         with st.spinner("AI Multi-Agent pipeline running (Miner → Judge → Clerk)..."):
             # 1. Trigger Multi-Agent extraction
             results = run_full_audit(selected_doc)
@@ -219,7 +269,22 @@ with col1:
                 print(f"Error generating current vector: {e}")
                 st.session_state['current_vector'] = None
 
-            # 3. Generate Visual Anchors
+            # 3. Store vector IDs for the commit step
+            #    IDs follow the pattern: {file_name}_p{page_number}
+            try:
+                idx = get_pinecone_index()
+                vec = st.session_state.get('current_vector')
+                if vec:
+                    id_results = idx.query(
+                        vector=vec, top_k=50,
+                        filter={"file_name": {"$eq": selected_doc}},
+                        include_metadata=False
+                    )
+                    st.session_state['vector_ids'] = [m['id'] for m in id_results.get('matches', [])]
+            except Exception:
+                st.session_state['vector_ids'] = []
+
+            # 4. Generate Visual Anchors
             temp_annotations = []
             if results and 'findings' in results:
                 for finding in results['findings']:
