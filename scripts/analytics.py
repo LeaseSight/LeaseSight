@@ -1,128 +1,81 @@
 # scripts/analytics.py
-# The Math Engine — 3D PCA Similarity Network Graph
+# The Math Engine — Dual Similarity Maps (Tactical + Strategic)
 
 import numpy as np
-import plotly.graph_objects as go
+from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.decomposition import PCA
 
 
-def generate_3d_network_graph(new_vector, database_vectors, doc_names):
+def generate_query_heatmap(query_vector, chunk_vectors, chunk_labels=None):
     """
-    Generates a 3D interactive scatter plot showing the spatial relationship
-    between a new document and the existing archive using PCA dimensionality reduction.
+    Map 1 (Tactical): Query vs. Current Document Chunks.
+    Measures cosine similarity between a search query and individual chunks
+    to show WHERE in the document the answer lives.
 
     Args:
-        new_vector (list[float]): The embedding vector for the currently selected document.
-        database_vectors (list[list[float]]): Embedding vectors from the archive.
-        doc_names (list[str]): Display names corresponding to each archive vector.
+        query_vector: The embedding vector of the search query.
+        chunk_vectors: List of embedding vectors for each document chunk.
+        chunk_labels: Optional labels for each chunk (e.g., "Page 1").
 
     Returns:
-        plotly.graph_objects.Figure or None if insufficient data.
+        dict with similarities list and labels for frontend rendering.
     """
+    if not chunk_vectors or len(chunk_vectors) == 0:
+        return {"similarities": [], "labels": [], "max_idx": 0}
 
-    # --- ROBUSTNESS CHECK ---
-    # PCA(n_components=3) requires at least 3 samples to define a 3D space.
-    # With fewer archive vectors, dimensionality reduction is mathematically invalid.
-    if len(database_vectors) < 3:
+    sims = cosine_similarity([query_vector], chunk_vectors)[0]
+    labels = chunk_labels or [f"Chunk {i+1}" for i in range(len(sims))]
+
+    return {
+        "similarities": sims.tolist(),
+        "labels": labels,
+        "max_idx": int(np.argmax(sims)),
+        "max_score": float(np.max(sims)),
+    }
+
+
+def generate_database_relationship_graph(current_doc_vector, archive_vectors, doc_names):
+    """
+    Map 2 (Strategic): Current Document vs. Global Database.
+    Uses PCA to project the current document and all archived documents
+    into 3D space to visualize structural similarity.
+
+    Args:
+        current_doc_vector: Embedding for the current document.
+        archive_vectors: List of archive document embeddings.
+        doc_names: Display names for archive documents.
+
+    Returns:
+        dict with PCA coordinates for frontend 3D rendering,
+        or None if insufficient data.
+    """
+    if len(archive_vectors) < 3:
         return None
 
-    # --- PCA DIMENSIONALITY REDUCTION ---
-    # Combine the new vector with the archive to project them into the same 3D space.
-    all_vectors = np.array(database_vectors + [new_vector])
-    all_names = doc_names + ["📄 CURRENT DOCUMENT"]
-
+    all_vectors = np.array(archive_vectors + [current_doc_vector])
     pca = PCA(n_components=3)
     coords_3d = pca.fit_transform(all_vectors)
 
-    # Split back: archive = all except last, current = last
     archive_coords = coords_3d[:-1]
     new_coords = coords_3d[-1]
 
-    # --- PLOTLY 3D SCATTER ---
-    # Truncate long filenames for cleaner hover labels
-    short_names = [
-        (n[:45] + "...") if len(n) > 48 else n for n in doc_names
-    ]
+    # Compute cosine similarities to current doc for coloring
+    sims = cosine_similarity([current_doc_vector], archive_vectors)[0]
 
-    # Archive nodes: blue, low opacity, small markers
-    archive_trace = go.Scatter3d(
-        x=archive_coords[:, 0],
-        y=archive_coords[:, 1],
-        z=archive_coords[:, 2],
-        mode="markers",
-        name="Archive Contracts",
-        text=short_names,
-        hoverinfo="text",
-        marker=dict(
-            size=4,
-            color="rgba(65, 105, 225, 0.35)",  # Royal blue, low opacity
-            symbol="circle",
-            line=dict(width=0.5, color="rgba(65, 105, 225, 0.6)"),
-        ),
-    )
+    short_names = [(n[:45] + "...") if len(n) > 48 else n for n in doc_names]
 
-    # New upload node: red diamond, high visibility
-    new_trace = go.Scatter3d(
-        x=[new_coords[0]],
-        y=[new_coords[1]],
-        z=[new_coords[2]],
-        mode="markers+text",
-        name="Current Document",
-        text=["📄 CURRENT DOCUMENT"],
-        textposition="top center",
-        textfont=dict(size=11, color="#FF4444"),
-        hoverinfo="text",
-        marker=dict(
-            size=10,
-            color="#FF4444",          # Bright red
-            symbol="diamond",
-            line=dict(width=2, color="#FFFFFF"),
-        ),
-    )
+    return {
+        "archive_coords": archive_coords.tolist(),
+        "new_coords": new_coords.tolist(),
+        "names": short_names,
+        "similarities": sims.tolist(),
+        "sufficient": True,
+        "explained_variance": pca.explained_variance_ratio_.tolist(),
+    }
 
-    # --- LAYOUT ---
-    fig = go.Figure(data=[archive_trace, new_trace])
 
-    fig.update_layout(
-        title=dict(
-            text="🌐 Document Similarity Network (PCA 3D Projection)",
-            font=dict(size=16, color="#E0E0E0"),
-            x=0.5,
-        ),
-        scene=dict(
-            xaxis=dict(
-                title="PC1",
-                backgroundcolor="rgba(20, 20, 35, 0.95)",
-                gridcolor="rgba(80, 80, 120, 0.3)",
-                showbackground=True,
-                zerolinecolor="rgba(100, 100, 150, 0.4)",
-            ),
-            yaxis=dict(
-                title="PC2",
-                backgroundcolor="rgba(20, 20, 35, 0.95)",
-                gridcolor="rgba(80, 80, 120, 0.3)",
-                showbackground=True,
-                zerolinecolor="rgba(100, 100, 150, 0.4)",
-            ),
-            zaxis=dict(
-                title="PC3",
-                backgroundcolor="rgba(20, 20, 35, 0.95)",
-                gridcolor="rgba(80, 80, 120, 0.3)",
-                showbackground=True,
-                zerolinecolor="rgba(100, 100, 150, 0.4)",
-            ),
-        ),
-        paper_bgcolor="rgba(15, 15, 25, 1)",
-        plot_bgcolor="rgba(15, 15, 25, 1)",
-        font=dict(color="#C0C0C0"),
-        legend=dict(
-            bgcolor="rgba(30, 30, 50, 0.8)",
-            bordercolor="rgba(80, 80, 120, 0.5)",
-            borderwidth=1,
-            font=dict(size=11),
-        ),
-        margin=dict(l=0, r=0, t=50, b=0),
-        height=600,
-    )
-
-    return fig
+# --- LEGACY: Keep the old function for backward compatibility ---
+def generate_3d_network_graph(new_vector, database_vectors, doc_names):
+    """Legacy wrapper — returns coordinate data for the frontend."""
+    result = generate_database_relationship_graph(new_vector, database_vectors, doc_names)
+    return result
