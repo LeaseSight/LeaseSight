@@ -48,6 +48,7 @@ export interface GraphData {
   new_coords: number[];
   names: string[];
   sufficient: boolean;
+  internal_similarities?: number[];
 }
 
 export interface HealthStatus {

@@ -9,13 +9,13 @@ from pathlib import Path
 sys.path.append(os.path.join(os.getcwd(), "scripts"))
 try:
     from scripts.visual_anchor import find_coordinates
-    from scripts.analytics import generate_3d_network_graph
+    from scripts.analytics import generate_database_relationship_graph, generate_query_heatmap
     from scripts.database_manager import commit_to_knowledge_base
     from scripts.query_engine import ask_document
 except ImportError:
     sys.path.append(str(Path(__file__).resolve().parent))
     from scripts.visual_anchor import find_coordinates
-    from scripts.analytics import generate_3d_network_graph
+    from scripts.analytics import generate_database_relationship_graph, generate_query_heatmap
     from scripts.database_manager import commit_to_knowledge_base
     from scripts.query_engine import ask_document
 
@@ -57,11 +57,29 @@ def get_pinecone_index():
 
 st.title("LeaseSight: Dynamic Visual Auditor")
 
+# --- PROFESSIONAL LIGHT THEME CSS ---
+st.markdown("""
+    <style>
+    .stApp { background-color: #f8fafc; color: #1e293b; }
+    [data-testid="stSidebar"] { background-color: #ffffff; border-right: 1px solid #e2e8f0; }
+    .stButton>button { background-color: #9333ea; color: white; border-radius: 6px; }
+    .success-box { 
+        background-color: #f0fdf4; 
+        border: 1px solid #bbf7d0; 
+        padding: 15px; 
+        border-radius: 8px; 
+        color: #166534;
+        margin-bottom: 20px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 # --- SESSION STATE INITIALIZATION ---
 defaults = {
     'audit_results': None,
     'annotations': [],
     'current_vector': None,
+    'chunk_vectors': [],
     'vector_ids': [],
     'committed': False,
     'source_path': None,
@@ -104,6 +122,13 @@ def render_dynamic_audit(summary_data, selected_doc):
     if not summary_data:
         st.warning("No data extracted yet.")
         return
+
+    st.markdown("""
+    <div class="success-box">
+        ✨ <b>Look what we found</b><br>
+        We processed the lease document and extracted key information. Please review for accuracy.
+    </div>
+    """, unsafe_allow_html=True)
 
     # Judge Warnings
     warnings = summary_data.get('warnings', [])
@@ -175,14 +200,13 @@ def render_dynamic_audit(summary_data, selected_doc):
                         result = commit_to_knowledge_base(
                             file_name=selected_doc,
                             source_path=st.session_state.get('source_path'),
-                            dest_folder=str(RAW_PDF_DIR),
                             vector_ids=st.session_state.get('vector_ids') or None
                         )
                         if result['success']:
                             st.session_state['committed'] = True
                             st.session_state['confirm_commit'] = False
                             st.balloons()
-                            st.sidebar.success(f"✅ Committed! {result['vectors_updated']} vectors verified.")
+                            st.sidebar.success("Document added to Gold Standard archive.")
                             st.rerun()
                         else:
                             st.error(f"❌ {result['message']}")
@@ -264,11 +288,14 @@ with col1:
                     id_results = idx.query(
                         vector=vec, top_k=50,
                         filter={"file_name": {"$eq": selected_doc}},
-                        include_metadata=False
+                        include_metadata=False,
+                        include_values=True
                     )
                     st.session_state['vector_ids'] = [m['id'] for m in id_results.get('matches', [])]
+                    st.session_state['chunk_vectors'] = [m['values'] for m in id_results.get('matches', []) if 'values' in m]
             except Exception:
                 st.session_state['vector_ids'] = []
+                st.session_state['chunk_vectors'] = []
 
             temp_annotations = []
             if results and 'findings' in results:
@@ -309,26 +336,38 @@ with col2:
         st.info("Upload or select a document to begin.")
 
 # ========================================================================
-# FEATURE 3: 3D SIMILARITY NETWORK GRAPH
+# FEATURE 3: SIMILARITY ANALYTICS (DUAL GRAPHS)
 # ========================================================================
-with st.expander("📊 View Document Relationship Map", expanded=False):
+with st.expander("📊 Similarity Analytics", expanded=True):
     if st.session_state.get('current_vector') and selected_doc:
-        with st.spinner("Building 3D similarity network..."):
-            archive_vectors, archive_names = fetch_archive_vectors(selected_doc)
-            if len(archive_vectors) >= 3:
-                fig = generate_3d_network_graph(
-                    new_vector=st.session_state['current_vector'],
-                    database_vectors=archive_vectors,
+        tab_internal, tab_global = st.tabs(["🎯 Query Heatmap", "🌐 Database Context"])
+        
+        with tab_internal:
+            chunk_vecs = st.session_state.get('chunk_vectors', [])
+            if chunk_vecs:
+                query_fig = generate_query_heatmap(st.session_state['current_vector'], chunk_vecs)
+                if query_fig:
+                    st.plotly_chart(query_fig, use_container_width=True)
+                else:
+                    st.info("Could not generate heatmap.")
+            else:
+                st.info("No chunk vectors available for heatmap.")
+                
+        with tab_global:
+            with st.spinner("Building 3D similarity network..."):
+                archive_vectors, archive_names = fetch_archive_vectors(selected_doc)
+                global_fig = generate_database_relationship_graph(
+                    current_doc_vector=st.session_state['current_vector'],
+                    archive_vectors=archive_vectors,
                     doc_names=archive_names,
+                    is_committed=st.session_state.get('committed', False)
                 )
-                if fig:
-                    st.plotly_chart(fig, use_container_width=True)
+                if global_fig:
+                    st.plotly_chart(global_fig, use_container_width=True)
                 else:
                     st.info("Not enough documents in archive to generate a map.")
-            else:
-                st.info("Not enough documents in archive to generate a map.")
     else:
-        st.info("Run an audit first to generate the document similarity map.")
+        st.info("Run an audit first to generate the similarity maps.")
 
 # ========================================================================
 # FEATURE 6: SCOPED DOCUMENT CHAT

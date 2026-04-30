@@ -41,7 +41,7 @@ export const api = {
     }),
 
   graphData: (file_name: string) =>
-    fetchJSON<GraphData>('/api/graph-data', {
+    fetchJSON<GraphData>('/api/analytics', {
       method: 'POST',
       body: JSON.stringify({ file_name }),
     }),

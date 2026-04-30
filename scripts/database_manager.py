@@ -17,10 +17,12 @@ load_dotenv()
 BASE_DIR = Path(r"C:\Users\zain\OneDrive\Desktop\LeaseSight")
 TEMP_DIR = BASE_DIR / "data" / "temp"
 RAW_PDF_DIR = BASE_DIR / "data" / "raw_pdfs"
+ARCHIVE_DIR = BASE_DIR / "data" / "archive"
 
 # Ensure directories exist
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 RAW_PDF_DIR.mkdir(parents=True, exist_ok=True)
+ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _get_pinecone_index():
@@ -52,7 +54,7 @@ def commit_to_knowledge_base(file_name, source_path=None, dest_folder=None, vect
     # --- STEP 1: PHYSICAL FILE MOVE ---
     if source_path:
         source = Path(source_path)
-        dest = Path(dest_folder) if dest_folder else RAW_PDF_DIR
+        dest = Path(dest_folder) if dest_folder else ARCHIVE_DIR
         dest.mkdir(parents=True, exist_ok=True)
         dest_path = dest / file_name
 

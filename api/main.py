@@ -27,7 +27,7 @@ from scripts.visual_anchor import find_coordinates
 from scripts.query_engine import ask_document
 from scripts.database_manager import commit_to_knowledge_base
 from scripts.processor import process_new_pdf
-from scripts.analytics import generate_3d_network_graph
+# Analytics logic is now handled directly or via frontend components
 
 from openai import OpenAI
 from pinecone import Pinecone
@@ -224,18 +224,30 @@ async def commit_document(request: CommitRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/graph-data")
-async def get_graph_data(request: GraphRequest):
-    """Get PCA-reduced 3D coordinates for the similarity network graph."""
+@app.post("/api/analytics")
+async def get_analytics_data(request: GraphRequest):
+    """Get dual analytics data: PCA-reduced 3D coordinates AND internal chunk similarities."""
     try:
-        # Generate embedding for the current document
+        # Generate embedding for the current document/query
         emb_res = oai_client.embeddings.create(
             input=["Parties involved, rent details, address, and legal obligations"],
             model="text-embedding-3-small"
         )
         current_vec = emb_res.data[0].embedding
 
-        # Fetch archive vectors
+        # 1. Fetch internal chunks for the current document (Heatmap)
+        from sklearn.metrics.pairwise import cosine_similarity
+        internal_results = pc_index.query(
+            vector=current_vec, top_k=50,
+            filter={"file_name": {"$eq": request.file_name}},
+            include_values=True, include_metadata=False
+        )
+        chunk_vectors = [m['values'] for m in internal_results.get('matches', []) if 'values' in m]
+        similarities = []
+        if chunk_vectors:
+            similarities = cosine_similarity([current_vec], chunk_vectors)[0].tolist()
+
+        # 2. Fetch archive vectors (Global Context)
         results = pc_index.query(
             vector=current_vec, top_k=100,
             include_values=True, include_metadata=True,
@@ -251,7 +263,10 @@ async def get_graph_data(request: GraphRequest):
             names.append(fn)
 
         if len(vectors) < 3:
-            return {"archive_coords": [], "new_coords": [], "names": [], "sufficient": False}
+            return {
+                "archive_coords": [], "new_coords": [], "names": [], "sufficient": False,
+                "internal_similarities": similarities
+            }
 
         # PCA reduction
         from sklearn.decomposition import PCA
@@ -266,7 +281,8 @@ async def get_graph_data(request: GraphRequest):
             "archive_coords": archive_coords,
             "new_coords": new_coords,
             "names": names,
-            "sufficient": True
+            "sufficient": True,
+            "internal_similarities": similarities
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

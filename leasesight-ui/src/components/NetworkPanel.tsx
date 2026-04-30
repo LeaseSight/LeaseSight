@@ -8,11 +8,13 @@ import { GraphData } from '@/lib/types';
 interface NetworkPanelProps {
   selectedDoc: string;
   onClose: () => void;
+  isCommitted?: boolean;
 }
 
-export function NetworkPanel({ selectedDoc, onClose }: NetworkPanelProps) {
+export function NetworkPanel({ selectedDoc, onClose, isCommitted }: NetworkPanelProps) {
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'heatmap' | '3d'>('heatmap');
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [rotation, setRotation] = useState({ x: 0.3, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -60,7 +62,7 @@ export function NetworkPanel({ selectedDoc, onClose }: NetworkPanelProps) {
     };
 
     // Clear
-    ctx.fillStyle = '#0a0a1a';
+    ctx.fillStyle = '#f8fafc'; // Light background
     ctx.fillRect(0, 0, W, H);
 
     // Draw grid lines (subtle)
@@ -79,7 +81,11 @@ export function NetworkPanel({ selectedDoc, onClose }: NetworkPanelProps) {
     const archiveProjected = graphData.archive_coords.map((p, i) => ({
       ...project(p), name: graphData.names[i], type: 'archive' as const
     }));
-    const newProjected = { ...project(graphData.new_coords), name: 'Current Document', type: 'new' as const };
+    const newProjected = { 
+      ...project(graphData.new_coords), 
+      name: isCommitted ? 'Current Lease (Archived)' : 'Current Document', 
+      type: 'new' as const 
+    };
 
     // Sort by z for painter's algorithm
     const allPoints = [...archiveProjected, newProjected].sort((a, b) => a.z - b.z);
@@ -89,9 +95,9 @@ export function NetworkPanel({ selectedDoc, onClose }: NetworkPanelProps) {
         const size = 3 * pt.s;
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, size, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(65, 105, 225, ${0.3 + pt.s * 0.2})`;
+        ctx.fillStyle = `rgba(203, 213, 225, ${0.4 + pt.s * 0.3})`; // #cbd5e1 (Slate Grey)
         ctx.fill();
-        ctx.strokeStyle = 'rgba(65, 105, 225, 0.5)';
+        ctx.strokeStyle = 'rgba(203, 213, 225, 0.8)';
         ctx.lineWidth = 0.5;
         ctx.stroke();
       } else {
@@ -103,36 +109,37 @@ export function NetworkPanel({ selectedDoc, onClose }: NetworkPanelProps) {
         ctx.lineTo(pt.x, pt.y + size);
         ctx.lineTo(pt.x - size, pt.y);
         ctx.closePath();
-        ctx.fillStyle = '#ef4444';
+        // If committed, color it Slate Grey (same as archive but solid) otherwise Lavender
+        ctx.fillStyle = isCommitted ? '#64748b' : '#9333ea';
         ctx.fill();
-        ctx.strokeStyle = '#fff';
+        ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 1.5;
         ctx.stroke();
         // Label
-        ctx.fillStyle = '#ef4444';
+        ctx.fillStyle = isCommitted ? '#64748b' : '#9333ea';
         ctx.font = '11px Inter, system-ui';
         ctx.textAlign = 'center';
-        ctx.fillText('📄 CURRENT', pt.x, pt.y - size - 6);
+        ctx.fillText(isCommitted ? '✅ VERIFIED ARCHIVE' : '📄 CURRENT', pt.x, pt.y - size - 6);
       }
     }
 
     // Legend
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
     ctx.fillRect(10, H - 50, 180, 40);
     ctx.strokeStyle = 'var(--border-default)';
     ctx.strokeRect(10, H - 50, 180, 40);
 
     ctx.beginPath(); ctx.arc(24, H - 35, 4, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(65, 105, 225, 0.6)'; ctx.fill();
-    ctx.fillStyle = '#94a3b8'; ctx.font = '10px Inter'; ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(203, 213, 225, 0.8)'; ctx.fill();
+    ctx.fillStyle = '#64748b'; ctx.font = '10px Inter'; ctx.textAlign = 'left';
     ctx.fillText(`Archive (${graphData.archive_coords.length})`, 34, H - 31);
 
     ctx.beginPath();
     ctx.moveTo(120, H - 39); ctx.lineTo(125, H - 35); ctx.lineTo(120, H - 31); ctx.lineTo(115, H - 35);
-    ctx.closePath(); ctx.fillStyle = '#ef4444'; ctx.fill();
-    ctx.fillStyle = '#94a3b8'; ctx.fillText('Current', 132, H - 31);
+    ctx.closePath(); ctx.fillStyle = isCommitted ? '#64748b' : '#9333ea'; ctx.fill();
+    ctx.fillStyle = '#64748b'; ctx.fillText(isCommitted ? 'Current (Archived)' : 'Current', 132, H - 31);
 
-  }, [graphData, rotation]);
+  }, [graphData, rotation, isCommitted]);
 
   // Mouse drag for rotation
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -161,39 +168,84 @@ export function NetworkPanel({ selectedDoc, onClose }: NetworkPanelProps) {
     <div className="h-64 border-t flex flex-col"
          style={{ borderColor: 'var(--border-default)', background: 'var(--bg-secondary)' }}>
       {/* Panel Header */}
-      <div className="h-8 flex items-center justify-between px-4 border-b"
+      <div className="h-10 flex items-center justify-between px-4 border-b"
            style={{ borderColor: 'var(--border-default)' }}>
-        <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-          🌐 Document Similarity Network (PCA 3D)
-        </span>
+        <div className="flex items-center gap-4 h-full">
+          <button
+            onClick={() => setActiveTab('heatmap')}
+            className={`h-full px-2 text-xs font-medium border-b-2 transition-colors ${activeTab === 'heatmap' ? 'border-[var(--accent-primary)] text-[var(--accent-primary)]' : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
+          >
+            🎯 Query Heatmap
+          </button>
+          <button
+            onClick={() => setActiveTab('3d')}
+            className={`h-full px-2 text-xs font-medium border-b-2 transition-colors ${activeTab === '3d' ? 'border-[var(--accent-primary)] text-[var(--accent-primary)]' : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
+          >
+            🌐 Database Context
+          </button>
+        </div>
         <button onClick={onClose} className="hover:opacity-70">
-          <X className="w-3.5 h-3.5" style={{ color: 'var(--text-secondary)' }} />
+          <X className="w-4 h-4" style={{ color: 'var(--text-secondary)' }} />
         </button>
       </div>
 
-      {/* Canvas */}
-      <div className="flex-1 flex items-center justify-center">
+      {/* Content */}
+      <div className="flex-1 flex items-center justify-center relative">
         {loading ? (
           <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
-            <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-            Building similarity network...
+            <div className="w-4 h-4 border-2 border-[var(--text-secondary)] border-t-transparent rounded-full animate-spin" />
+            Loading similarity data...
           </div>
-        ) : !graphData?.sufficient ? (
-          <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-            Not enough documents in archive to generate a map
-          </p>
+        ) : activeTab === '3d' ? (
+          !graphData?.sufficient ? (
+            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+              Not enough documents in archive to generate a 3D map
+            </p>
+          ) : (
+            <canvas
+              ref={canvasRef}
+              width={900}
+              height={220}
+              className="w-full h-full cursor-grab active:cursor-grabbing"
+              style={{ background: '#f8fafc' }}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+            />
+          )
         ) : (
-          <canvas
-            ref={canvasRef}
-            width={900}
-            height={220}
-            className="w-full h-full cursor-grab active:cursor-grabbing"
-            style={{ background: '#0a0a1a' }}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
-          />
+          <div className="w-full h-full p-4 overflow-y-auto">
+            {graphData?.internal_similarities && graphData.internal_similarities.length > 0 ? (
+              <div>
+                <h4 className="text-xs font-semibold mb-3" style={{ color: 'var(--text-secondary)' }}>Internal Document Relevance</h4>
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(28px,1fr))] gap-1.5">
+                  {graphData.internal_similarities.map((score, i) => {
+                    const normalized = Math.max(0, Math.min(1, score));
+                    // Mint Green scale (GnBu approximation)
+                    return (
+                      <div key={i} 
+                           className="aspect-square rounded flex items-center justify-center group relative cursor-pointer"
+                           style={{ 
+                             backgroundColor: `rgba(16, 185, 129, ${0.1 + normalized * 0.9})`,
+                             border: '1px solid rgba(16, 185, 129, 0.2)' 
+                           }}>
+                        <span className="text-[10px] font-medium opacity-50 group-hover:opacity-100 transition-opacity mix-blend-multiply">
+                          {i + 1}
+                        </span>
+                        <div className="absolute -top-8 left-1/2 -translate-x-1/2 shadow-sm px-2 py-1 rounded text-[10px] opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-10"
+                             style={{ background: 'var(--bg-card)', border: '1px solid var(--border-default)', color: 'var(--text-primary)' }}>
+                          Chunk {i + 1}: {(score * 100).toFixed(1)}%
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+               <p className="text-xs text-center mt-10" style={{ color: 'var(--text-secondary)' }}>No internal similarity data available.</p>
+            )}
+          </div>
         )}
       </div>
     </div>

@@ -15,6 +15,7 @@ export default function Home() {
   const [targetPage, setTargetPage] = useState<number>(1);
   const [isAuditing, setIsAuditing] = useState(false);
   const [showNetwork, setShowNetwork] = useState(false);
+  const [isCommitted, setIsCommitted] = useState(false);
 
   const handleLocate = useCallback((annotation: Annotation) => {
     setAnnotations([annotation]);
@@ -47,6 +48,7 @@ export default function Home() {
             onAuditStart={() => setIsAuditing(true)}
             onAuditComplete={handleAuditComplete}
             onLocate={handleLocate}
+            onCommitChange={setIsCommitted}
           />
         </div>
 
@@ -65,6 +67,7 @@ export default function Home() {
         <NetworkPanel
           selectedDoc={selectedDoc}
           onClose={() => setShowNetwork(false)}
+          isCommitted={isCommitted}
         />
       )}
 

@@ -15,11 +15,12 @@ interface LeftPaneProps {
   onAuditStart: () => void;
   onAuditComplete: (result: AuditResult) => void;
   onLocate: (annotation: Annotation) => void;
+  onCommitChange?: (committed: boolean) => void;
 }
 
 export function LeftPane({
   selectedDoc, onSelectDoc, auditResult,
-  onAuditStart, onAuditComplete, onLocate,
+  onAuditStart, onAuditComplete, onLocate, onCommitChange
 }: LeftPaneProps) {
   const [documents, setDocuments] = useState<string[]>([]);
   const [isAuditing, setIsAuditing] = useState(false);
@@ -35,6 +36,7 @@ export function LeftPane({
     if (!selectedDoc) return;
     setIsAuditing(true);
     setCommitted(false);
+    onCommitChange?.(false);
     onAuditStart();
     try {
       const result = await api.audit(selectedDoc);
@@ -65,6 +67,7 @@ export function LeftPane({
       const result = await api.commit(selectedDoc);
       if (result.success) {
         setCommitted(true);
+        onCommitChange?.(true);
         setShowCommitModal(false);
       }
     } catch (e) {
@@ -107,9 +110,9 @@ export function LeftPane({
           disabled={!selectedDoc || isAuditing}
           className="w-full mt-3 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
           style={{
-            background: isAuditing ? 'var(--bg-card)' : 'var(--accent-emerald)',
-            color: isAuditing ? 'var(--accent-emerald)' : '#000',
-            border: isAuditing ? '1px solid var(--accent-emerald)' : 'none',
+            background: isAuditing ? 'var(--bg-card)' : 'var(--accent-primary)',
+            color: isAuditing ? 'var(--accent-primary)' : '#ffffff',
+            border: isAuditing ? '1px solid var(--accent-primary)' : 'none',
           }}
         >
           {isAuditing ? (
@@ -130,6 +133,13 @@ export function LeftPane({
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {auditResult ? (
           <>
+            {/* Success Box */}
+            <div className="rounded-lg p-3 flex flex-col gap-1"
+                 style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534' }}>
+              <span className="text-sm font-semibold">✨ Look what we found</span>
+              <span className="text-xs">We processed the lease document and extracted key information. Please review for accuracy.</span>
+            </div>
+
             {/* Risk Gauge + Warnings */}
             <div className="flex items-start gap-4">
               <RiskGauge score={auditResult.risk_score || 1} />
@@ -189,8 +199,8 @@ export function LeftPane({
                 </div>
               ) : (
                 <button onClick={() => setShowCommitModal(true)}
-                        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold glow-emerald transition-all"
-                        style={{ background: 'var(--accent-emerald)', color: '#000' }}>
+                        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold glow-primary transition-all"
+                        style={{ background: 'var(--accent-primary)', color: '#ffffff' }}>
                   <Database className="w-4 h-4" />
                   Commit to Knowledge Base
                 </button>
