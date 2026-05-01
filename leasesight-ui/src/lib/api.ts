@@ -55,4 +55,22 @@ export const api = {
     if (!res.ok) throw new Error(`Upload error: ${res.status}`);
     return res.json();
   },
+
+  checkIndex: (filename: string) => fetchJSON<{ status: string; was_missing: boolean }>(`/api/index-status/${encodeURIComponent(filename)}`),
+
+  exportAuditPdf: async (filename: string, auditData: any) => {
+    const res = await fetch(`${API_BASE}/api/export/${encodeURIComponent(filename)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(auditData),
+    });
+    if (!res.ok) throw new Error(`Export error: ${res.status}`);
+    return res.blob();
+  },
+
+  queryAnalytics: (query: string, file_name: string) =>
+    fetchJSON<GraphData>('/api/query-analytics', {
+      method: 'POST',
+      body: JSON.stringify({ query, file_name }),
+    }),
 };

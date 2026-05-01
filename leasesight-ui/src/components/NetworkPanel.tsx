@@ -1,193 +1,135 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { api } from '@/lib/api';
 import { GraphData } from '@/lib/types';
 import { BenchmarkGauge } from './BenchmarkGauge';
+import dynamic from 'next/dynamic';
+
+// Dynamically import Plotly to avoid SSR issues and bundle size bloat on initial load
+const Plot = dynamic(() => import('react-plotly.js'), { 
+  ssr: false, 
+  loading: () => <div className="flex-1 flex items-center justify-center text-xs" style={{ color: 'var(--text-secondary)' }}><div className="w-4 h-4 border-2 border-[var(--text-secondary)] border-t-transparent rounded-full animate-spin mr-2" />Loading Plotly Engine...</div> 
+});
 
 interface NetworkPanelProps {
   selectedDoc: string;
   onClose: () => void;
   isCommitted?: boolean;
+  query?: string;
 }
 
-export function NetworkPanel({ selectedDoc, onClose, isCommitted }: NetworkPanelProps) {
+export function NetworkPanel({ selectedDoc, onClose, isCommitted, query }: NetworkPanelProps) {
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'heatmap' | '3d'>('heatmap');
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [rotation, setRotation] = useState({ x: 0.3, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const lastMouse = useRef({ x: 0, y: 0 });
+  const [activeTab, setActiveTab] = useState<'heatmap' | 'plotly3d' | 'plotly2d'>('plotly3d');
 
   useEffect(() => {
     setLoading(true);
-    api.graphData(selectedDoc)
-      .then(setGraphData)
-      .catch(() => setGraphData(null))
-      .finally(() => setLoading(false));
-  }, [selectedDoc]);
-
-  // 3D rendering with Canvas2D (lightweight, no Three.js dep issues)
-  useEffect(() => {
-    if (!canvasRef.current || !graphData?.sufficient) return;
-
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const W = canvas.width;
-    const H = canvas.height;
-    const cx = W / 2;
-    const cy = H / 2;
-    const scale = Math.min(W, H) * 0.3;
-
-    // Rotation matrix (Y then X)
-    const cosY = Math.cos(rotation.y);
-    const sinY = Math.sin(rotation.y);
-    const cosX = Math.cos(rotation.x);
-    const sinX = Math.sin(rotation.x);
-
-    const project = (p: number[]) => {
-      // Rotate Y
-      const x1 = p[0] * cosY - p[2] * sinY;
-      const z1 = p[0] * sinY + p[2] * cosY;
-      // Rotate X
-      const y1 = p[1] * cosX - z1 * sinX;
-      const z2 = p[1] * sinX + z1 * cosX;
-      // Perspective
-      const fov = 3;
-      const s = fov / (fov + z2 * 0.5);
-      return { x: cx + x1 * scale * s, y: cy + y1 * scale * s, z: z2, s };
-    };
-
-    // Clear
-    ctx.fillStyle = '#f8fafc'; // Light background
-    ctx.fillRect(0, 0, W, H);
-
-    // Draw grid lines (subtle)
-    ctx.strokeStyle = 'rgba(51, 65, 85, 0.15)';
-    ctx.lineWidth = 0.5;
-    for (let i = -2; i <= 2; i++) {
-      const a = project([i, 0, -2]);
-      const b = project([i, 0, 2]);
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-      const c = project([-2, 0, i]);
-      const d = project([2, 0, i]);
-      ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(d.x, d.y); ctx.stroke();
+    if (query) {
+      api.queryAnalytics(query, selectedDoc)
+        .then(setGraphData)
+        .catch(() => setGraphData(null))
+        .finally(() => setLoading(false));
+      setActiveTab('plotly3d'); // Default to 3D when query changes
+    } else {
+      api.graphData(selectedDoc)
+        .then(setGraphData)
+        .catch(() => setGraphData(null))
+        .finally(() => setLoading(false));
     }
+  }, [selectedDoc, query]);
 
-    // Draw archive points
-    const archiveProjected = graphData.archive_coords.map((p, i) => ({
-      ...project(p), name: graphData.names[i], type: 'archive' as const
-    }));
-    const newProjected = { 
-      ...project(graphData.new_coords), 
-      name: isCommitted ? 'Current Lease (Archived)' : 'Current Document', 
-      type: 'new' as const 
-    };
+  const getPlotData = () => {
+    if (!graphData?.sufficient) return [];
 
-    // Sort by z for painter's algorithm
-    const allPoints = [...archiveProjected, newProjected].sort((a, b) => a.z - b.z);
+    const is2D = activeTab === 'plotly2d';
 
-    for (const pt of allPoints) {
-      if (pt.type === 'archive') {
-        const size = 3 * pt.s;
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, size, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(203, 213, 225, ${0.4 + pt.s * 0.3})`; // #cbd5e1 (Slate Grey)
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(203, 213, 225, 0.8)';
-        ctx.lineWidth = 0.5;
-        ctx.stroke();
-      } else {
-        const size = 7 * pt.s;
-        // Diamond shape
-        ctx.beginPath();
-        ctx.moveTo(pt.x, pt.y - size);
-        ctx.lineTo(pt.x + size, pt.y);
-        ctx.lineTo(pt.x, pt.y + size);
-        ctx.lineTo(pt.x - size, pt.y);
-        ctx.closePath();
-        // If committed, color it Slate Grey (same as archive but solid) otherwise Lavender
-        ctx.fillStyle = isCommitted ? '#64748b' : '#9333ea';
-        ctx.fill();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-        // Label
-        ctx.fillStyle = isCommitted ? '#64748b' : '#9333ea';
-        ctx.font = '11px Inter, system-ui';
-        ctx.textAlign = 'center';
-        ctx.fillText(isCommitted ? '✅ VERIFIED ARCHIVE' : '📄 CURRENT', pt.x, pt.y - size - 6);
+    const archiveTrace: any = {
+      x: graphData.archive_coords.map(c => c[0]),
+      y: graphData.archive_coords.map(c => c[1]),
+      z: is2D ? undefined : graphData.archive_coords.map(c => c[2]),
+      text: graphData.names,
+      mode: 'markers',
+      type: is2D ? 'scatter' : 'scatter3d',
+      name: query ? 'Document Chunks' : 'Archive',
+      marker: {
+        color: query ? 'rgba(59, 130, 246, 0.6)' : 'rgba(203, 213, 225, 0.6)', // Blue for query chunks, slate for archive
+        size: is2D ? 10 : 6,
+        line: { color: query ? 'rgba(29, 78, 216, 0.8)' : 'rgba(100, 116, 139, 0.8)', width: 1 }
       }
-    }
+    };
 
-    // Legend
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-    ctx.fillRect(10, H - 50, 180, 40);
-    ctx.strokeStyle = 'var(--border-default)';
-    ctx.strokeRect(10, H - 50, 180, 40);
+    const newTrace: any = {
+      x: [graphData.new_coords[0]],
+      y: [graphData.new_coords[1]],
+      z: is2D ? undefined : [graphData.new_coords[2]],
+      text: [query ? '⭐ YOUR QUERY' : (isCommitted ? 'Current Lease (Archived)' : 'Current Document')],
+      mode: 'markers+text',
+      type: is2D ? 'scatter' : 'scatter3d',
+      name: query ? 'User Query' : 'Current Doc',
+      textposition: 'top center',
+      marker: {
+        color: query ? '#facc15' : (isCommitted ? '#64748b' : '#9333ea'),
+        symbol: 'diamond',
+        size: is2D ? 16 : 10,
+        line: { color: '#ffffff', width: 2 }
+      },
+      textfont: { color: query ? '#eab308' : (isCommitted ? '#64748b' : '#9333ea'), size: 11, family: 'Inter', weight: 'bold' }
+    };
 
-    ctx.beginPath(); ctx.arc(24, H - 35, 4, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(203, 213, 225, 0.8)'; ctx.fill();
-    ctx.fillStyle = '#64748b'; ctx.font = '10px Inter'; ctx.textAlign = 'left';
-    ctx.fillText(`Archive (${graphData.archive_coords.length})`, 34, H - 31);
-
-    ctx.beginPath();
-    ctx.moveTo(120, H - 39); ctx.lineTo(125, H - 35); ctx.lineTo(120, H - 31); ctx.lineTo(115, H - 35);
-    ctx.closePath(); ctx.fillStyle = isCommitted ? '#64748b' : '#9333ea'; ctx.fill();
-    ctx.fillStyle = '#64748b'; ctx.fillText(isCommitted ? 'Current (Archived)' : 'Current', 132, H - 31);
-
-  }, [graphData, rotation, isCommitted]);
-
-  // Mouse drag for rotation
-  const handleMouseDown = (e: React.MouseEvent) => {
-    setIsDragging(true);
-    lastMouse.current = { x: e.clientX, y: e.clientY };
+    return [archiveTrace, newTrace];
   };
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging) return;
-    const dx = e.clientX - lastMouse.current.x;
-    const dy = e.clientY - lastMouse.current.y;
-    setRotation(r => ({ x: r.x + dy * 0.005, y: r.y + dx * 0.005 }));
-    lastMouse.current = { x: e.clientX, y: e.clientY };
-  };
-  const handleMouseUp = () => setIsDragging(false);
 
-  // Auto-rotate
-  useEffect(() => {
-    if (isDragging || !graphData?.sufficient) return;
-    const interval = setInterval(() => {
-      setRotation(r => ({ ...r, y: r.y + 0.003 }));
-    }, 16);
-    return () => clearInterval(interval);
-  }, [isDragging, graphData]);
+  const layout: any = {
+    margin: { l: 0, r: 0, b: 0, t: 0 },
+    paper_bgcolor: 'transparent',
+    plot_bgcolor: 'transparent',
+    font: { color: '#94a3b8', family: 'Inter' },
+    showlegend: true,
+    legend: { x: 0.02, y: 0.95, font: { size: 10 }, bgcolor: 'rgba(15, 23, 42, 0.5)' },
+    scene: activeTab === 'plotly3d' ? {
+      xaxis: { showgrid: true, gridcolor: '#334155', zeroline: false, showticklabels: false, backgroundcolor: 'transparent' },
+      yaxis: { showgrid: true, gridcolor: '#334155', zeroline: false, showticklabels: false, backgroundcolor: 'transparent' },
+      zaxis: { showgrid: true, gridcolor: '#334155', zeroline: false, showticklabels: false, backgroundcolor: 'transparent' },
+      camera: { eye: { x: 1.2, y: 1.2, z: 1.2 } }
+    } : undefined,
+    xaxis: activeTab === 'plotly2d' ? { showgrid: true, gridcolor: '#334155', zeroline: false, showticklabels: false } : undefined,
+    yaxis: activeTab === 'plotly2d' ? { showgrid: true, gridcolor: '#334155', zeroline: false, showticklabels: false } : undefined,
+  };
 
   return (
-    <div className="h-64 border-t flex flex-col"
+    <div className="h-[300px] border-t flex flex-col"
          style={{ borderColor: 'var(--border-default)', background: 'var(--bg-secondary)' }}>
       {/* Panel Header */}
-      <div className="h-10 flex items-center justify-between px-4 border-b"
+      <div className="h-10 flex items-center justify-between px-4 border-b shrink-0"
            style={{ borderColor: 'var(--border-default)' }}>
         <div className="flex items-center gap-4 h-full">
           <button
             onClick={() => setActiveTab('heatmap')}
             className={`h-full px-2 text-xs font-medium border-b-2 transition-colors ${activeTab === 'heatmap' ? 'border-[var(--accent-primary)] text-[var(--accent-primary)]' : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
           >
-            🎯 Query Heatmap
+            🎯 Internal Heatmap
           </button>
+          
           <button
-            onClick={() => setActiveTab('3d')}
-            className={`h-full px-2 text-xs font-medium border-b-2 transition-colors ${activeTab === '3d' ? 'border-[var(--accent-primary)] text-[var(--accent-primary)]' : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
+            onClick={() => setActiveTab('plotly3d')}
+            className={`h-full px-2 text-xs font-medium border-b-2 transition-colors ${activeTab === 'plotly3d' ? 'border-[var(--accent-primary)] text-[var(--accent-primary)]' : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
           >
-            🌐 Database Context
+            {query ? '🔭 3D Query Correlation' : '🌐 3D Database Context'}
+          </button>
+
+          <button
+            onClick={() => setActiveTab('plotly2d')}
+            className={`h-full px-2 text-xs font-medium border-b-2 transition-colors ${activeTab === 'plotly2d' ? 'border-[var(--accent-primary)] text-[var(--accent-primary)]' : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
+          >
+            {query ? '📐 2D Precision Mode' : '📐 2D Archive Mode'}
           </button>
         </div>
         
         <div className="flex items-center gap-6">
-          {graphData?.benchmark_score !== undefined && (
+          {graphData?.benchmark_score !== undefined && !query && (
             <div className="py-1">
               <BenchmarkGauge score={graphData.benchmark_score} />
             </div>
@@ -199,31 +141,13 @@ export function NetworkPanel({ selectedDoc, onClose, isCommitted }: NetworkPanel
       </div>
 
       {/* Content */}
-      <div className="flex-1 flex items-center justify-center relative">
+      <div className="flex-1 min-h-0 relative bg-slate-900/50">
         {loading ? (
-          <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
-            <div className="w-4 h-4 border-2 border-[var(--text-secondary)] border-t-transparent rounded-full animate-spin" />
-            Loading similarity data...
+          <div className="w-full h-full flex items-center justify-center text-xs" style={{ color: 'var(--text-secondary)' }}>
+            <div className="w-4 h-4 border-2 border-[var(--text-secondary)] border-t-transparent rounded-full animate-spin mr-2" />
+            Loading vector analytics...
           </div>
-        ) : activeTab === '3d' ? (
-          !graphData?.sufficient ? (
-            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-              Not enough documents in archive to generate a 3D map
-            </p>
-          ) : (
-            <canvas
-              ref={canvasRef}
-              width={900}
-              height={220}
-              className="w-full h-full cursor-grab active:cursor-grabbing"
-              style={{ background: '#f8fafc' }}
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
-              onMouseLeave={handleMouseUp}
-            />
-          )
-        ) : (
+        ) : activeTab === 'heatmap' ? (
           <div className="w-full h-full p-4 overflow-y-auto">
             {graphData?.internal_similarities && graphData.internal_similarities.length > 0 ? (
               <div>
@@ -231,7 +155,6 @@ export function NetworkPanel({ selectedDoc, onClose, isCommitted }: NetworkPanel
                 <div className="grid grid-cols-[repeat(auto-fit,minmax(28px,1fr))] gap-1.5">
                   {graphData.internal_similarities.map((score, i) => {
                     const normalized = Math.max(0, Math.min(1, score));
-                    // Mint Green scale (GnBu approximation)
                     return (
                       <div key={i} 
                            className="aspect-square rounded flex items-center justify-center group relative cursor-pointer"
@@ -255,6 +178,24 @@ export function NetworkPanel({ selectedDoc, onClose, isCommitted }: NetworkPanel
                <p className="text-xs text-center mt-10" style={{ color: 'var(--text-secondary)' }}>No internal similarity data available.</p>
             )}
           </div>
+        ) : (
+          !graphData?.sufficient ? (
+            <div className="w-full h-full flex items-center justify-center">
+              <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                Not enough vectors mapped to generate Plotly space.
+              </p>
+            </div>
+          ) : (
+            <div className="w-full h-full">
+              <Plot
+                data={getPlotData()}
+                layout={layout}
+                useResizeHandler={true}
+                style={{ width: '100%', height: '100%' }}
+                config={{ displayModeBar: false }}
+              />
+            </div>
+          )
         )}
       </div>
     </div>

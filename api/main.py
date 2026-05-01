@@ -53,7 +53,7 @@ oai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 pc_index = pc.Index("leasesight-index")
 
-DPI = 72
+DPI = 1.0 # Emit raw Azure inches for Next.js formula
 
 
 # ========================================================================
@@ -115,6 +115,19 @@ async def serve_pdf(filename: str):
     return FileResponse(str(pdf_path), media_type="application/pdf")
 
 
+@app.get("/api/index-status/{filename:path}")
+async def check_index_status(filename: str):
+    """Check if document has a JSON map, index it if not."""
+    json_path = JSON_MAP_DIR / f"{filename}.json"
+    if not json_path.exists():
+        target_path = RAW_PDF_DIR / filename
+        if not target_path.exists():
+            raise HTTPException(status_code=404, detail="PDF not found")
+        process_new_pdf(str(target_path), filename)
+        return {"status": "indexed", "was_missing": True}
+    return {"status": "indexed", "was_missing": False}
+
+
 @app.post("/api/upload")
 async def upload_document(file: UploadFile = File(...)):
     """Upload and process a new PDF."""
@@ -158,6 +171,31 @@ async def run_audit(request: AuditRequest):
                         })
 
         results["annotations"] = annotations
+
+        # Log to Excel
+        try:
+            import pandas as pd
+            import datetime
+            excel_path = BASE_DIR / "audit_log.xlsx"
+            if excel_path.exists():
+                df = pd.read_excel(excel_path)
+            else:
+                df = pd.DataFrame()
+                
+            findings_dict = {f.get('label'): f.get('value') for f in results.get('findings', [])}
+            log_data = {
+                'Timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'File_Name': request.file_name,
+                'Lessor/Lessee': findings_dict.get('Parties', findings_dict.get('Tenant/Landlord', 'Unknown')),
+                'Rent': findings_dict.get('Monthly Rent', 'Unknown'),
+                'Risk_Score': results.get('risk_score', 'N/A'),
+                'Key_Terms': ', '.join([f"{k}: {v}" for k, v in findings_dict.items()][:5])
+            }
+            df = pd.concat([df, pd.DataFrame([log_data])], ignore_index=True)
+            df.to_excel(excel_path, index=False)
+        except Exception as e:
+            print(f"Excel Logging Error: {e}")
+
         return results
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -404,41 +442,71 @@ async def generate_calendar(request: CalendarRequest):
     lines.append("END:VCALENDAR")
     return Response(content="\\r\\n".join(lines), media_type="text/calendar")
 
-@app.get("/api/export/{file_name:path}")
-async def export_audit(file_name: str):
+@app.get("/api/audit-log")
+async def download_audit_log():
+    """Download the master audit ledger."""
+    excel_path = BASE_DIR / "audit_log.xlsx"
+    if not excel_path.exists():
+        raise HTTPException(status_code=404, detail="Audit log not found")
+    return FileResponse(
+        str(excel_path), 
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename="audit_log.xlsx"
+    )
+
+from fastapi import Request
+
+@app.post("/api/export/{file_name:path}")
+async def export_audit(file_name: str, request: Request):
     """Generate a branded PDF report for the audit using ReportLab."""
     try:
-        from reportlab.lib.pagesizes import letter
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib import colors
-        from reportlab.lib.units import inch
+        audit_results = await request.json()
+        from scripts.report_generator import generate_audit_pdf
+        pdf_bytes = generate_audit_pdf(audit_results, file_name)
+        return Response(content=pdf_bytes, media_type="application/pdf")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/query-analytics")
+async def get_query_analytics(request: ChatRequest):
+    """Generate 3D correlation map for a query against document chunks."""
+    try:
+        from sklearn.metrics.pairwise import cosine_similarity
+        from sklearn.decomposition import PCA
         
-        pdf_path = BASE_DIR / "data" / f"Audit_{file_name}.pdf"
-        doc = SimpleDocTemplate(str(pdf_path), pagesize=letter)
-        styles = getSampleStyleSheet()
+        # Embed the query
+        emb_res = oai_client.embeddings.create(
+            input=[request.query],
+            model="text-embedding-3-small"
+        )
+        query_vec = emb_res.data[0].embedding
         
-        # Branding styles
-        title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], textColor=colors.HexColor('#9333ea'), fontSize=24)
-        h2_style = ParagraphStyle('H2Style', parent=styles['Heading2'], textColor=colors.HexColor('#1e293b'))
-        normal_style = styles['Normal']
+        # Fetch chunk vectors
+        internal_results = pc_index.query(
+            vector=query_vec, top_k=50,
+            filter={"file_name": {"$eq": request.file_name}},
+            include_values=True, include_metadata=False
+        )
+        chunk_vectors = [m['values'] for m in internal_results.get('matches', []) if 'values' in m]
         
-        elements = []
-        elements.append(Paragraph("LeaseSight Final Audit Report", title_style))
-        elements.append(Spacer(1, 0.2*inch))
-        elements.append(Paragraph(f"Document: {file_name}", styles['Italic']))
-        elements.append(Spacer(1, 0.5*inch))
+        if len(chunk_vectors) < 2:
+            return {"sufficient": False}
+            
+        similarities = cosine_similarity([query_vec], chunk_vectors)[0].tolist()
         
-        # Try to read the audit result if we saved it, but since we don't persist it per document yet,
-        # we will run a quick summary or just print a placeholder. In a full system, we'd load the JSON.
-        elements.append(Paragraph("Executive Brief", h2_style))
-        elements.append(Paragraph("This is a verified legal audit generated by the LeaseSight Multi-Agent Pipeline. All findings have been cross-referenced with the global Pinecone archive.", normal_style))
-        elements.append(Spacer(1, 0.5*inch))
+        all_vectors = np.array(chunk_vectors + [query_vec])
+        pca = PCA(n_components=3)
+        coords_3d = pca.fit_transform(all_vectors)
         
-        elements.append(Paragraph("Risk & Benchmark Status", h2_style))
-        elements.append(Paragraph("The document has been evaluated against the market standard.", normal_style))
+        chunk_coords = coords_3d[:-1].tolist()
+        query_coord = coords_3d[-1].tolist()
         
-        doc.build(elements)
-        return FileResponse(str(pdf_path), media_type="application/pdf", filename=f"Audit_{file_name}.pdf")
+        return {
+            "sufficient": True,
+            "archive_coords": chunk_coords,
+            "new_coords": query_coord,
+            "similarities": similarities,
+            "names": [f"Chunk {i+1}" for i in range(len(chunk_coords))]
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

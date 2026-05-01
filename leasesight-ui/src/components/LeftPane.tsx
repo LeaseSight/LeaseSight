@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { ChevronDown, Play, AlertTriangle, CheckCircle, Database, Download } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { ChevronDown, Play, AlertTriangle, CheckCircle, Database, Download, Upload } from 'lucide-react';
 import { api } from '@/lib/api';
 import { AuditResult, Annotation } from '@/lib/types';
 import { RiskGauge } from './RiskGauge';
@@ -17,21 +17,47 @@ interface LeftPaneProps {
   onAuditComplete: (result: AuditResult) => void;
   onLocate: (annotation: Annotation) => void;
   onCommitChange?: (committed: boolean) => void;
+  documents: string[];
+  setDocuments: (docs: string[]) => void;
 }
 
 export function LeftPane({
+  documents, setDocuments,
   selectedDoc, onSelectDoc, auditResult,
   onAuditStart, onAuditComplete, onLocate, onCommitChange
 }: LeftPaneProps) {
-  const [documents, setDocuments] = useState<string[]>([]);
   const [isAuditing, setIsAuditing] = useState(false);
   const [showCommitModal, setShowCommitModal] = useState(false);
   const [isCommitting, setIsCommitting] = useState(false);
   const [committed, setCommitted] = useState(false);
+  const [isIndexing, setIsIndexing] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    api.documents().then(d => setDocuments(d.documents)).catch(() => {});
-  }, []);
+    if (!selectedDoc) return;
+    setIsIndexing(true);
+    api.checkIndex(selectedDoc)
+      .catch(console.error)
+      .finally(() => setIsIndexing(false));
+  }, [selectedDoc]);
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploading(true);
+    try {
+      const res = await api.upload(file);
+      const docsRes = await api.documents();
+      setDocuments(docsRes.documents);
+      onSelectDoc(res.file_name);
+    } catch (error) {
+      console.error('Upload failed:', error);
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
 
   const handleRunAudit = async () => {
     if (!selectedDoc) return;
@@ -78,9 +104,21 @@ export function LeftPane({
     }
   };
 
-  const handleExport = () => {
-    if (!selectedDoc) return;
-    window.open(`http://localhost:8000/api/export/${encodeURIComponent(selectedDoc)}`, '_blank');
+  const handleExport = async () => {
+    if (!selectedDoc || !auditResult) return;
+    try {
+      const blob = await api.exportAuditPdf(selectedDoc, auditResult);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Audit_Report_${selectedDoc}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      a.remove();
+    } catch (e) {
+      console.error('Export failed:', e);
+    }
   };
 
   return (
@@ -110,21 +148,54 @@ export function LeftPane({
                        style={{ color: 'var(--text-secondary)' }} />
         </div>
 
+        <div className="flex gap-2 mt-2">
+          <input
+            type="file"
+            accept=".pdf"
+            ref={fileInputRef}
+            onChange={handleUpload}
+            className="hidden"
+          />
+          <button 
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isUploading}
+            className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-all hover:opacity-80 disabled:opacity-50" 
+            style={{ background: 'var(--accent-primary)', color: '#fff' }}
+          >
+            {isUploading ? (
+              <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <Upload className="w-3.5 h-3.5" />
+            )}
+            Upload PDF
+          </button>
+          
+          <a href="http://localhost:8000/api/audit-log" download className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-all hover:bg-gray-100" style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)' }}>
+            <Download className="w-3.5 h-3.5" />
+            Audit Log
+          </a>
+        </div>
+
         {/* Run Audit Button */}
         <button
           onClick={handleRunAudit}
-          disabled={!selectedDoc || isAuditing}
+          disabled={!selectedDoc || isAuditing || isIndexing}
           className="w-full mt-3 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
           style={{
-            background: isAuditing ? 'var(--bg-card)' : 'var(--accent-primary)',
-            color: isAuditing ? 'var(--accent-primary)' : '#ffffff',
-            border: isAuditing ? '1px solid var(--accent-primary)' : 'none',
+            background: isAuditing || isIndexing ? 'var(--bg-card)' : 'var(--accent-primary)',
+            color: isAuditing || isIndexing ? 'var(--accent-primary)' : '#ffffff',
+            border: isAuditing || isIndexing ? '1px solid var(--accent-primary)' : 'none',
           }}
         >
           {isAuditing ? (
             <>
               <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
               Running Pipeline...
+            </>
+          ) : isIndexing ? (
+            <>
+              <div className="w-4 h-4 border-2 border-[var(--accent-primary)] border-t-transparent rounded-full animate-spin" />
+              Indexing Document...
             </>
           ) : (
             <>

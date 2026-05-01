@@ -4,7 +4,15 @@ import { useEffect, useRef, useState, useMemo } from 'react';
 import { FileText } from 'lucide-react';
 import { Annotation } from '@/lib/types';
 import { api } from '@/lib/api';
-import { DiffViewer } from './DiffViewer';
+import { Document, Page, pdfjs } from 'react-pdf';
+import 'react-pdf/dist/Page/AnnotationLayer.css';
+import 'react-pdf/dist/Page/TextLayer.css';
+
+// Configure PDF.js worker to use the local bundle
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url,
+).toString();
 
 interface RightPaneProps {
   selectedDoc: string | null;
@@ -14,14 +22,8 @@ interface RightPaneProps {
 
 export function RightPane({ selectedDoc, annotations, targetPage }: RightPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [numPages, setNumPages] = useState<number>(0);
-  const [pdfLoaded, setPdfLoaded] = useState(false);
-  const [compareMode, setCompareMode] = useState(false);
   const [internalTargetPage, setInternalTargetPage] = useState<number>(targetPage);
-
-  // PDF.js dimensions — standard US Letter at 72 DPI = 612x792 points
-  const PAGE_WIDTH = 612;
-  const PAGE_HEIGHT = 792;
+  const [containerWidth, setContainerWidth] = useState<number>(0);
 
   const pdfUrl = useMemo(
     () => selectedDoc ? api.pdfUrl(selectedDoc) : null,
@@ -33,31 +35,18 @@ export function RightPane({ selectedDoc, annotations, targetPage }: RightPanePro
     setInternalTargetPage(targetPage);
   }, [targetPage]);
 
-  // Auto-scroll to target page
+  // Resize observer for page-specific scaling
   useEffect(() => {
-    if (!containerRef.current || !pdfLoaded) return;
-    const pageEl = containerRef.current.querySelector(`[data-page="${internalTargetPage}"]`);
-    if (pageEl) {
-      pageEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-  }, [internalTargetPage, pdfLoaded, annotations]);
-
-  // Detect number of pages using a simple iframe approach
-  // For production, use react-pdf — this is a lightweight fallback
-  useEffect(() => {
-    if (!pdfUrl) {
-      setPdfLoaded(false);
-      setNumPages(0);
-      return;
-    }
-    setPdfLoaded(false);
-    // We'll use the embed approach for robust PDF rendering
-    const timer = setTimeout(() => {
-      setPdfLoaded(true);
-      setNumPages(1); // iframe handles all pages internally
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [pdfUrl]);
+    if (!containerRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      if (entries[0]) {
+        // Leave some padding
+        setContainerWidth(entries[0].contentRect.width - 32); 
+      }
+    });
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
 
   if (!selectedDoc) {
     return (
@@ -90,51 +79,59 @@ export function RightPane({ selectedDoc, annotations, targetPage }: RightPanePro
             {annotations.length} highlight{annotations.length > 1 ? 's' : ''}
           </span>
         )}
-        <button 
-          onClick={() => setCompareMode(!compareMode)} 
-          className="ml-4 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded transition-colors" 
-          style={{ background: compareMode ? 'var(--accent-primary)' : 'var(--bg-card)', color: compareMode ? '#fff' : 'var(--text-primary)', border: '1px solid var(--border-default)' }}>
-          {compareMode ? 'Exit Compare' : 'Compare Mode'}
-        </button>
       </div>
 
-      <div className="flex-1 flex min-h-0 relative">
-        {compareMode && (
-          <DiffViewer 
-            selectedDoc={selectedDoc} 
-            onSelectDiff={setInternalTargetPage} 
-            onClose={() => setCompareMode(false)} 
-          />
-        )}
-        {/* PDF Container with overlays */}
-        <div ref={containerRef} className="flex-1 overflow-auto relative"
-             style={{ background: '#1a1a2e' }}>
-        {pdfUrl && (
-          <div className="relative w-full h-full">
-            {/* PDF rendered via iframe (most reliable cross-browser) */}
-            <iframe
-              src={`${pdfUrl}#page=${internalTargetPage}`}
-              className="w-full h-full border-none"
-              title="PDF Preview"
-              style={{ background: '#2a2a3e' }}
-            />
-
-            {/* Annotation overlays — rendered as floating indicators */}
-            {annotations.length > 0 && (
-              <div className="absolute top-2 right-2 space-y-1 z-10">
-                {annotations.map((ann, i) => (
-                  <div key={i} className="flex items-center gap-2 px-2 py-1 rounded-md text-xs glass"
-                       style={{ color: ann.color === 'orange' ? 'var(--accent-orange)' : 'var(--accent-red)' }}>
-                    <div className="w-2 h-2 rounded-full animate-pulse-dot"
-                         style={{ background: ann.color === 'orange' ? 'var(--accent-orange)' : 'var(--accent-red)' }} />
-                    Page {ann.page} — Highlighted
-                  </div>
-                ))}
-              </div>
-            )}
+      {/* PDF Container */}
+      <div 
+        ref={containerRef} 
+        className="flex-1 overflow-y-auto relative max-h-[800px] p-4 flex justify-center"
+        style={{ background: '#1a1a2e' }}
+      >
+        {pdfUrl && containerWidth > 0 && (
+          <div className="relative shadow-xl" style={{ width: containerWidth }}>
+            <Document 
+              file={pdfUrl} 
+              onLoadError={(error) => console.error('Error while loading document!', error)}
+              loading={<div className="text-white text-sm text-center p-10">Loading PDF engine...</div>}
+              error={<div className="text-red-500 text-sm text-center p-10 bg-red-500/10 rounded-lg">Failed to load PDF. Check network console.</div>}
+            >
+              <Page 
+                pageNumber={internalTargetPage} 
+                width={containerWidth} 
+                renderTextLayer={false} 
+                renderAnnotationLayer={false} 
+              />
+              
+              {/* Active Highlighting Overlays */}
+              {annotations.filter(a => a.page === internalTargetPage).map((ann, i) => {
+                // Formula: Pixel_X = (Inches_X / Page_Width_Inches) * Container_Width_Pixels
+                const PAGE_WIDTH_INCHES = 8.5;
+                const PAGE_HEIGHT_INCHES = 11.0;
+                
+                const pxX = (ann.x / PAGE_WIDTH_INCHES) * containerWidth;
+                const pxY = (ann.y / PAGE_HEIGHT_INCHES) * (containerWidth * (PAGE_HEIGHT_INCHES / PAGE_WIDTH_INCHES));
+                const pxW = (ann.width / PAGE_WIDTH_INCHES) * containerWidth;
+                const pxH = (ann.height / PAGE_HEIGHT_INCHES) * (containerWidth * (PAGE_HEIGHT_INCHES / PAGE_WIDTH_INCHES));
+                
+                return (
+                  <div 
+                    key={i}
+                    className="absolute z-10 pointer-events-none rounded-sm transition-all duration-500 animate-pulse"
+                    style={{
+                      left: `${pxX}px`,
+                      top: `${pxY}px`,
+                      width: `${pxW}px`,
+                      height: `${pxH}px`,
+                      backgroundColor: 'rgba(239, 68, 68, 0.3)',
+                      border: '1.5px solid rgba(239, 68, 68, 0.8)',
+                      boxShadow: '0 0 10px rgba(239, 68, 68, 0.4)'
+                    }}
+                  />
+                );
+              })}
+            </Document>
           </div>
         )}
-      </div>
       </div>
     </div>
   );

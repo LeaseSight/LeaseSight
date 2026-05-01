@@ -8,9 +8,10 @@ import { ChatMessage, Annotation } from '@/lib/types';
 interface ChatOverlayProps {
   selectedDoc: string;
   onLocate: (annotation: Annotation) => void;
+  onMapQuery: (query: string) => void;
 }
 
-export function ChatOverlay({ selectedDoc, onLocate }: ChatOverlayProps) {
+export function ChatOverlay({ selectedDoc, onLocate, onMapQuery }: ChatOverlayProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -108,6 +109,20 @@ export function ChatOverlay({ selectedDoc, onLocate }: ChatOverlayProps) {
                 >
                   <MapPin className="w-3 h-3" />
                   Locate on Page {msg.page}
+                </button>
+              )}
+              {msg.role === 'assistant' && (
+                <button
+                  onClick={() => {
+                    const userMsg = messages[i - 1];
+                    if (userMsg && userMsg.role === 'user') {
+                      onMapQuery(userMsg.content);
+                    }
+                  }}
+                  className="flex items-center gap-1 mt-2 text-xs transition-colors hover:opacity-80"
+                  style={{ color: 'var(--accent-primary)' }}
+                >
+                  🔭 Map Query Similarity
                 </button>
               )}
             </div>

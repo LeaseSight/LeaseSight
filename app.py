@@ -4,20 +4,24 @@ from streamlit_pdf_viewer import pdf_viewer
 import os
 import sys
 from pathlib import Path
+import pandas as pd
+import datetime
 
 # --- IMPORT FALLBACK ---
 sys.path.append(os.path.join(os.getcwd(), "scripts"))
 try:
     from scripts.visual_anchor import find_coordinates
-    from scripts.analytics import generate_database_relationship_graph, generate_query_heatmap
+    from scripts.analytics import generate_database_relationship_graph, generate_query_heatmap, generate_query_similarity_3d
     from scripts.database_manager import commit_to_knowledge_base
     from scripts.query_engine import ask_document
+    from scripts.report_generator import generate_audit_pdf
 except ImportError:
     sys.path.append(str(Path(__file__).resolve().parent))
     from scripts.visual_anchor import find_coordinates
-    from scripts.analytics import generate_database_relationship_graph, generate_query_heatmap
+    from scripts.analytics import generate_database_relationship_graph, generate_query_heatmap, generate_query_similarity_3d
     from scripts.database_manager import commit_to_knowledge_base
     from scripts.query_engine import ask_document
+    from scripts.report_generator import generate_audit_pdf
 
 # Custom Script Imports
 from scripts.processor import process_new_pdf
@@ -91,6 +95,20 @@ for key, val in defaults.items():
     if key not in st.session_state:
         st.session_state[key] = val
 
+# --- HELPER: EXCEL LOGGER ---
+def log_audit_to_excel(data_dict):
+    try:
+        excel_path = BASE_DIR / "audit_log.xlsx"
+        if excel_path.exists():
+            df = pd.read_excel(excel_path)
+        else:
+            df = pd.DataFrame()
+        
+        data_dict['Timestamp'] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        df = pd.concat([df, pd.DataFrame([data_dict])], ignore_index=True)
+        df.to_excel(excel_path, index=False)
+    except Exception as e:
+        print(f"Error logging to Excel: {e}")
 
 # --- HELPER: FETCH ARCHIVE VECTORS ---
 def fetch_archive_vectors(current_doc_name, sample_size=100):
@@ -167,8 +185,7 @@ def render_dynamic_audit(summary_data, selected_doc):
                                 "page": int(coord_data['page']),
                                 "x": min(xs), "y": min(ys),
                                 "width": max(xs) - min(xs),
-                                "height": max(ys) - min(ys),
-                                "color": "red", "thickness": 2
+                                "height": max(ys) - min(ys)
                             }]
                             st.session_state['pdf_page'] = int(coord_data['page'])
                             st.rerun()
@@ -236,9 +253,28 @@ if uploaded_file:
 else:
     all_pdfs = sorted([f for f in os.listdir(RAW_PDF_DIR) if f.lower().endswith('.pdf')])
     selected_doc = st.sidebar.selectbox("Or select existing document:", all_pdfs) if all_pdfs else None
+    if selected_doc:
+        target_path = RAW_PDF_DIR / selected_doc
+        st.session_state['source_path'] = str(target_path)
+        
+        json_map_path = JSON_MAP_DIR / f"{selected_doc}.json"
+        if not json_map_path.exists():
+            with st.sidebar.status("Indexing existing document..."):
+                process_new_pdf(str(target_path), selected_doc)
+                st.sidebar.success("Document Indexed!")
 
 # Risk Score Metric
 st.sidebar.divider()
+excel_path = BASE_DIR / "audit_log.xlsx"
+if excel_path.exists():
+    with open(excel_path, "rb") as f:
+        st.sidebar.download_button(
+            label="⬇ Download Audit History",
+            data=f,
+            file_name="audit_log.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
 if st.session_state['audit_results']:
     rs = st.session_state['audit_results'].get('risk_score')
     wl = st.session_state['audit_results'].get('warnings', [])
@@ -311,27 +347,59 @@ with col1:
                                 "page": int(coord_data['page']),
                                 "x": min(xs), "y": min(ys),
                                 "width": max(xs) - min(xs),
-                                "height": max(ys) - min(ys),
-                                "color": "red", "thickness": 2
+                                "height": max(ys) - min(ys)
                             })
             st.session_state['annotations'] = temp_annotations
 
+            # Log audit to excel
+            findings_dict = {f.get('label'): f.get('value') for f in results.get('findings', [])}
+            log_data = {
+                'File_Name': selected_doc,
+                'Lease_Name': findings_dict.get('Document Type', 'Unknown'),
+                'Total_Rent': findings_dict.get('Monthly Rent', 'Unknown'),
+                'Risk_Score': results.get('risk_score', 'N/A'),
+                'Key_Terms': ', '.join([f"{k}: {v}" for k, v in findings_dict.items()][:5])
+            }
+            log_audit_to_excel(log_data)
+
     if st.session_state['audit_results']:
         render_dynamic_audit(st.session_state['audit_results'], selected_doc)
+        
+        st.divider()
+        pdf_bytes = generate_audit_pdf(st.session_state['audit_results'], selected_doc)
+        st.download_button(
+            label="📄 Export Audit Report (PDF)",
+            data=pdf_bytes,
+            file_name=f"Audit_Report_{selected_doc}.pdf",
+            mime="application/pdf",
+            type="primary"
+        )
 
 # RIGHT COLUMN: PDF Preview
 with col2:
     st.subheader("📄 Document Preview")
     if selected_doc:
         pdf_path = str(RAW_PDF_DIR / selected_doc)
-        # Build viewer kwargs — include page jump if set
+        with open(pdf_path, "rb") as f:
+            pdf_bytes = f.read()
+            
+        st.markdown("""
+        <style>
+        iframe { border: none !important; }
+        [data-testid="stVerticalBlock"] { overflow-y: auto; max-height: 820px; }
+        </style>
+        """, unsafe_allow_html=True)
+        
         viewer_kwargs = {
+            "input": pdf_bytes,
+            "width": 700,
+            "height": 800,
             "annotations": st.session_state.get('annotations', []),
         }
         target_page = st.session_state.get('pdf_page')
         if target_page:
             viewer_kwargs["pages_to_render"] = [target_page]
-        pdf_viewer(pdf_path, **viewer_kwargs)
+        pdf_viewer(**viewer_kwargs)
     else:
         st.info("Upload or select a document to begin.")
 
@@ -390,13 +458,11 @@ else:
                         bbox = coord_data['bounding_box']
                         xs = [p['x'] * DPI for p in bbox]
                         ys = [p['y'] * DPI for p in bbox]
-                        # Chat highlights use orange to distinguish from red audit highlights
                         st.session_state['annotations'] = [{
                             "page": int(coord_data['page']),
                             "x": min(xs), "y": min(ys),
                             "width": max(xs) - min(xs),
-                            "height": max(ys) - min(ys),
-                            "color": "orange", "thickness": 2
+                            "height": max(ys) - min(ys)
                         }]
                         st.session_state['pdf_page'] = int(coord_data['page'])
                         st.rerun()
@@ -445,8 +511,7 @@ else:
                             "page": int(coord_data['page']),
                             "x": min(xs), "y": min(ys),
                             "width": max(xs) - min(xs),
-                            "height": max(ys) - min(ys),
-                            "color": "orange", "thickness": 2
+                            "height": max(ys) - min(ys)
                         }]
                         st.session_state['pdf_page'] = int(coord_data['page'])
                     elif page:
@@ -454,3 +519,21 @@ else:
 
                 if source_text:
                     st.caption(f"📄 Source: Page {page or '?'}")
+
+    # Feature 8: 3D Query Similarity Map
+    if st.session_state['messages'] and st.session_state['messages'][-1]['role'] == 'assistant':
+        if st.button("🔭 Map Query Similarity"):
+            last_user_msg = next((m['content'] for m in reversed(st.session_state['messages']) if m['role'] == 'user'), None)
+            if last_user_msg and st.session_state.get('chunk_vectors'):
+                with st.spinner("Generating 3D Correlation Map..."):
+                    try:
+                        oai = get_openai_client()
+                        emb_res = oai.embeddings.create(input=[last_user_msg], model="text-embedding-3-small")
+                        query_vec = emb_res.data[0].embedding
+                        fig = generate_query_similarity_3d(query_vec, st.session_state['chunk_vectors'])
+                        if fig:
+                            st.plotly_chart(fig, use_container_width=True)
+                        else:
+                            st.info("Not enough data to plot similarity map.")
+                    except Exception as e:
+                        st.error(f"Error generating similarity map: {e}")
