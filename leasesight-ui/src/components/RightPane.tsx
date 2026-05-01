@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useMemo } from 'react';
 import { FileText } from 'lucide-react';
 import { Annotation } from '@/lib/types';
 import { api } from '@/lib/api';
+import { DiffViewer } from './DiffViewer';
 
 interface RightPaneProps {
   selectedDoc: string | null;
@@ -15,7 +16,8 @@ export function RightPane({ selectedDoc, annotations, targetPage }: RightPanePro
   const containerRef = useRef<HTMLDivElement>(null);
   const [numPages, setNumPages] = useState<number>(0);
   const [pdfLoaded, setPdfLoaded] = useState(false);
-  const [scale] = useState(1.0);
+  const [compareMode, setCompareMode] = useState(false);
+  const [internalTargetPage, setInternalTargetPage] = useState<number>(targetPage);
 
   // PDF.js dimensions — standard US Letter at 72 DPI = 612x792 points
   const PAGE_WIDTH = 612;
@@ -26,14 +28,19 @@ export function RightPane({ selectedDoc, annotations, targetPage }: RightPanePro
     [selectedDoc]
   );
 
+  // Sync external target page
+  useEffect(() => {
+    setInternalTargetPage(targetPage);
+  }, [targetPage]);
+
   // Auto-scroll to target page
   useEffect(() => {
     if (!containerRef.current || !pdfLoaded) return;
-    const pageEl = containerRef.current.querySelector(`[data-page="${targetPage}"]`);
+    const pageEl = containerRef.current.querySelector(`[data-page="${internalTargetPage}"]`);
     if (pageEl) {
       pageEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-  }, [targetPage, pdfLoaded, annotations]);
+  }, [internalTargetPage, pdfLoaded, annotations]);
 
   // Detect number of pages using a simple iframe approach
   // For production, use react-pdf — this is a lightweight fallback
@@ -83,16 +90,30 @@ export function RightPane({ selectedDoc, annotations, targetPage }: RightPanePro
             {annotations.length} highlight{annotations.length > 1 ? 's' : ''}
           </span>
         )}
+        <button 
+          onClick={() => setCompareMode(!compareMode)} 
+          className="ml-4 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded transition-colors" 
+          style={{ background: compareMode ? 'var(--accent-primary)' : 'var(--bg-card)', color: compareMode ? '#fff' : 'var(--text-primary)', border: '1px solid var(--border-default)' }}>
+          {compareMode ? 'Exit Compare' : 'Compare Mode'}
+        </button>
       </div>
 
-      {/* PDF Container with overlays */}
-      <div ref={containerRef} className="flex-1 overflow-auto relative"
-           style={{ background: '#1a1a2e' }}>
+      <div className="flex-1 flex min-h-0 relative">
+        {compareMode && (
+          <DiffViewer 
+            selectedDoc={selectedDoc} 
+            onSelectDiff={setInternalTargetPage} 
+            onClose={() => setCompareMode(false)} 
+          />
+        )}
+        {/* PDF Container with overlays */}
+        <div ref={containerRef} className="flex-1 overflow-auto relative"
+             style={{ background: '#1a1a2e' }}>
         {pdfUrl && (
           <div className="relative w-full h-full">
             {/* PDF rendered via iframe (most reliable cross-browser) */}
             <iframe
-              src={`${pdfUrl}#page=${targetPage}`}
+              src={`${pdfUrl}#page=${internalTargetPage}`}
               className="w-full h-full border-none"
               title="PDF Preview"
               style={{ background: '#2a2a3e' }}
@@ -113,6 +134,7 @@ export function RightPane({ selectedDoc, annotations, targetPage }: RightPanePro
             )}
           </div>
         )}
+      </div>
       </div>
     </div>
   );

@@ -1,12 +1,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { ChevronDown, Play, AlertTriangle, CheckCircle, Database } from 'lucide-react';
+import { ChevronDown, Play, AlertTriangle, CheckCircle, Database, Download } from 'lucide-react';
 import { api } from '@/lib/api';
 import { AuditResult, Annotation } from '@/lib/types';
 import { RiskGauge } from './RiskGauge';
 import { FindingCard } from './FindingCard';
 import { CommitModal } from './CommitModal';
+import { ObligationTimeline } from './ObligationTimeline';
 
 interface LeftPaneProps {
   selectedDoc: string | null;
@@ -75,6 +76,11 @@ export function LeftPane({
     } finally {
       setIsCommitting(false);
     }
+  };
+
+  const handleExport = () => {
+    if (!selectedDoc) return;
+    window.open(`http://localhost:8000/api/export/${encodeURIComponent(selectedDoc)}`, '_blank');
   };
 
   return (
@@ -175,6 +181,11 @@ export function LeftPane({
               </div>
             </div>
 
+            {/* Smart Obligation Timeline */}
+            {auditResult.obligations && (
+              <ObligationTimeline obligations={auditResult.obligations} />
+            )}
+
             {/* Executive Brief */}
             {auditResult.summary_paragraph && (
               <div className="rounded-lg p-3"
@@ -189,22 +200,32 @@ export function LeftPane({
               </div>
             )}
 
-            {/* Commit Button */}
-            <div className="pt-2">
-              {committed ? (
-                <div className="flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm"
-                     style={{ background: 'rgba(16, 185, 129, 0.1)', color: 'var(--accent-emerald)', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
-                  <CheckCircle className="w-4 h-4" />
-                  Committed as Legal Precedent
-                </div>
-              ) : (
-                <button onClick={() => setShowCommitModal(true)}
-                        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold glow-primary transition-all"
-                        style={{ background: 'var(--accent-primary)', color: '#ffffff' }}>
-                  <Database className="w-4 h-4" />
-                  Commit to Knowledge Base
-                </button>
-              )}
+            {/* Action Buttons */}
+            <div className="pt-2 flex gap-2">
+              <div className="flex-1">
+                {committed ? (
+                  <div className="flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm"
+                       style={{ background: 'rgba(16, 185, 129, 0.1)', color: 'var(--accent-emerald)', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                    <CheckCircle className="w-4 h-4" />
+                    Committed as Legal Precedent
+                  </div>
+                ) : (
+                  <button onClick={() => setShowCommitModal(true)}
+                          className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold glow-primary transition-all"
+                          style={{ background: 'var(--accent-primary)', color: '#ffffff' }}>
+                    <Database className="w-4 h-4" />
+                    Commit to Knowledge Base
+                  </button>
+                )}
+              </div>
+              
+              {/* Export Button */}
+              <button onClick={handleExport}
+                      className="flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-semibold transition-all hover:opacity-80"
+                      style={{ background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border-default)' }}>
+                <Download className="w-4 h-4" />
+                Export
+              </button>
             </div>
           </>
         ) : (

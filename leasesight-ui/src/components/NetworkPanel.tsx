@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import { X } from 'lucide-react';
 import { api } from '@/lib/api';
 import { GraphData } from '@/lib/types';
+import { BenchmarkGauge } from './BenchmarkGauge';
 
 interface NetworkPanelProps {
   selectedDoc: string;
@@ -184,9 +185,17 @@ export function NetworkPanel({ selectedDoc, onClose, isCommitted }: NetworkPanel
             🌐 Database Context
           </button>
         </div>
-        <button onClick={onClose} className="hover:opacity-70">
-          <X className="w-4 h-4" style={{ color: 'var(--text-secondary)' }} />
-        </button>
+        
+        <div className="flex items-center gap-6">
+          {graphData?.benchmark_score !== undefined && (
+            <div className="py-1">
+              <BenchmarkGauge score={graphData.benchmark_score} />
+            </div>
+          )}
+          <button onClick={onClose} className="hover:opacity-70">
+            <X className="w-4 h-4" style={{ color: 'var(--text-secondary)' }} />
+          </button>
+        </div>
       </div>
 
       {/* Content */}

@@ -30,7 +30,7 @@ Your SOLE job is to extract every critical data point from the contract text bel
 
 Rules:
 1. Extract up to 12 critical data points.
-2. Return ONLY a JSON object with one key: 'findings'.
+2. Return ONLY a JSON object with two keys: 'findings' and 'obligations'.
 3. Each finding MUST have exactly three keys:
    - 'label': The field name (e.g., "Monthly Rent", "Lessor", "Start Date").
    - 'value': The extracted value (e.g., "$2,500", "June 1, 2023").
@@ -38,14 +38,16 @@ Rules:
      This is CRITICAL — downstream systems use this for visual grounding.
 4. If a value cannot be found, set BOTH 'value' and 'evidence_quote' to "Not Found".
 5. Include 'Document Type' as the FIRST finding.
-6. Prioritize extraction order: Parties (Lessor/Lessee), Financials (Rent/Fees),
-   Property/Asset Address, Timeline (Start Date, End Date, Term), Governing Law.
+6. Extract all time-sensitive dates (Renewals, Notice Periods, Rent Hikes) into the 'obligations' array.
+   Each obligation MUST have: 'label' (short title), 'date' (exact date or relative time), and 'description'.
 
 Example:
 {
   "findings": [
-    {"label": "Document Type", "value": "Lease Agreement", "evidence_quote": "This Lease Agreement is entered into"},
-    {"label": "Start Date", "value": "January 1, 2024", "evidence_quote": "commencing on January 1, 2024"}
+    {"label": "Document Type", "value": "Lease Agreement", "evidence_quote": "This Lease Agreement is entered into"}
+  ],
+  "obligations": [
+    {"label": "Renewal Notice Due", "date": "September 1, 2024", "description": "Tenant must provide 90 days written notice to renew."}
   ]
 }
 """
@@ -53,26 +55,24 @@ Example:
 # --- AGENT 2: THE JUDGE ---
 # Critical review for Red Flags: date conflicts, missing parties, logical errors
 JUDGE_PROMPT = """
-You are "The Judge," a Legal Risk Analyst. You receive extracted findings from a contract
-and must evaluate them for Red Flags and logical errors.
+You are "The Judge," a Legal Risk Analyst. You receive extracted findings from a contract and a "Market Context" sample of standard precedents from our verified archive.
 
 Your tasks:
-1. Review ALL findings for logical consistency.
-2. Specifically check for these Red Flags:
+1. Compare the findings against the provided Market Context to determine if the clauses (e.g., rent, termination, deposit) are "Standard" or "Outliers".
+2. Review ALL findings for logical consistency.
+3. Specifically check for these Red Flags:
+   - NON-STANDARD CLAUSES: Is the security deposit unusually high compared to the market? Are termination terms predatory?
    - DATE CONFLICTS: Does the End Date occur BEFORE the Start Date?
-   - MISSING PARTIES: Are Lessor/Lessee (or equivalent party names) missing or "Not Found"?
-   - MISSING SIGNATURES: Is there no mention of signing parties or execution?
-   - FINANCIAL ANOMALIES: Are rent/fee amounts suspiciously absent or zero?
-   - TERM INCONSISTENCIES: Does the stated term length conflict with start/end dates?
-3. Assign a 'risk_score' from 1 (very low risk) to 10 (critical issues found).
-4. Provide a list of 'warnings' — each a clear, actionable sentence.
+   - MISSING PARTIES: Are Lessor/Lessee missing?
+4. Assign a 'risk_score' from 1 (very low risk, highly standard) to 10 (critical issues, extreme outlier).
+5. Provide a list of 'warnings' (Red Flags) — each a clear, actionable sentence.
 
 Return ONLY a JSON object:
 {
   "risk_score": 3,
   "warnings": [
-    "End Date (Dec 2022) occurs before Start Date (Jan 2023) — possible data entry error.",
-    "Lessee name was not found in the extracted data."
+    "Security deposit is 3x monthly rent, whereas the market standard is 1x.",
+    "End Date occurs before Start Date."
   ]
 }
 
@@ -83,19 +83,19 @@ If no issues are found, return: {"risk_score": 1, "warnings": []}
 # Final synthesizer — merges Miner + Judge output into the canonical format
 CLERK_PROMPT = """
 You are "The Clerk," a Legal Document Synthesizer. You receive:
-1. Extracted findings from the Miner (with evidence_quote for each field).
+1. Extracted findings and obligations from the Miner (with evidence_quote for each field).
 2. A risk assessment from the Judge (risk_score + warnings).
 
 Your job is to produce the FINAL audit report as a single JSON object with these keys:
 - 'findings': The Miner's findings list — PRESERVE ALL evidence_quote values exactly as-is.
-  Do NOT modify, summarize, or remove any evidence_quote. They are used for visual grounding.
+- 'obligations': The Miner's obligations list — PRESERVE as-is.
 - 'summary_paragraph': A concise 3-sentence executive summary of the document.
 - 'risk_score': The Judge's risk score (integer, 1-10).
 - 'warnings': The Judge's warnings list (array of strings).
 
 CRITICAL RULES:
 - Do NOT alter the evidence_quote fields. Copy them verbatim from the Miner's output.
-- Do NOT add or remove findings. Pass them through unchanged.
+- Do NOT add or remove findings or obligations. Pass them through unchanged.
 - The summary_paragraph should mention the document type, key parties, and any notable risks.
 
 Return ONLY the JSON object.
@@ -147,12 +147,16 @@ def agent_miner(context_text):
     return result or {"findings": []}
 
 
-def agent_judge(miner_output):
-    """Agent 2: Evaluate findings for red flags and assign risk score."""
-    print("[JUDGE] Reviewing for red flags...")
+def agent_judge(miner_output, market_context):
+    """Agent 2: Evaluate findings for red flags and assign risk score against market standard."""
+    print("[JUDGE] Reviewing for red flags against market standard...")
+    input_content = json.dumps({
+        "findings": miner_output,
+        "market_context": market_context
+    }, indent=2)
     result = _call_agent(
         JUDGE_PROMPT,
-        f"Review these extracted contract findings for issues:\n\n{json.dumps(miner_output, indent=2)}",
+        f"Review these extracted contract findings against the market precedents:\n\n{input_content}",
         "JUDGE"
     )
     if result:
@@ -178,6 +182,7 @@ def agent_clerk(miner_output, judge_output):
     if not result:
         result = {
             "findings": miner_output.get("findings", []),
+            "obligations": miner_output.get("obligations", []),
             "summary_paragraph": "Error during synthesis. Raw findings preserved.",
             "risk_score": judge_output.get("risk_score", 1),
             "warnings": judge_output.get("warnings", [])
@@ -233,9 +238,32 @@ def run_full_audit(target_file):
         print(f"Pinecone Retrieval Error: {e}")
         return None
 
-    # 2. PIPELINE: Miner → Judge → Clerk
+    # 2. Pinecone query for Market Context
+    try:
+        market_res = client.embeddings.create(
+            input=["Standard lease termination, security deposit, and renewal clauses"],
+            model="text-embedding-3-small"
+        )
+        market_vec = market_res.data[0].embedding
+        market_results = index.query(
+            vector=market_vec,
+            top_k=5,
+            filter={"file_name": {"$ne": target_file}},
+            include_metadata=True
+        )
+        market_context = "\n".join([
+            f"Precedent: {m['metadata'].get('text', '')}"
+            for m in market_results.get('matches', [])
+        ])
+        if not market_context:
+            market_context = "No precedents available in the database for comparison."
+    except Exception as e:
+        print(f"Market Context Error: {e}")
+        market_context = "Market context unavailable."
+
+    # 3. PIPELINE: Miner → Judge → Clerk
     miner_output = agent_miner(context)
-    judge_output = agent_judge(miner_output)
+    judge_output = agent_judge(miner_output, market_context)
     final_report = agent_clerk(miner_output, judge_output)
 
     print(f"--- AUDIT COMPLETE: {len(final_report.get('findings', []))} findings, "

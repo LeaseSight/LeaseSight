@@ -5,8 +5,15 @@ export interface Finding {
   evidence_quote: string;
 }
 
+export interface Obligation {
+  label: string;
+  date: string;
+  description: string;
+}
+
 export interface AuditResult {
   findings: Finding[];
+  obligations?: Obligation[];
   summary_paragraph: string;
   risk_score: number;
   warnings: string[];
@@ -49,6 +56,7 @@ export interface GraphData {
   names: string[];
   sufficient: boolean;
   internal_similarities?: number[];
+  benchmark_score?: number;
 }
 
 export interface HealthStatus {
