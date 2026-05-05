@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Activity, Search, Zap, Wifi, WifiOff, Network } from 'lucide-react';
-import { api } from '@/lib/api';
+import Link from 'next/link';
+import { Activity, Search, Zap, Wifi, WifiOff, Network, Settings, KeyRound } from 'lucide-react';
+import { api, hasStoredKeys } from '@/lib/api';
 
 interface HeaderProps {
   isAuditing: boolean;
@@ -12,115 +13,155 @@ interface HeaderProps {
 }
 
 export function Header({ isAuditing, onToggleNetwork, documents, onSelectDoc }: HeaderProps) {
-  const [health, setHealth] = useState<{ pinecone: string; openai: string } | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [health, setHealth]               = useState<{ pinecone: string; openai: string } | null>(null);
+  const [searchQuery, setSearchQuery]     = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [keysConfigured, setKeysConfigured]   = useState(false);
 
   useEffect(() => {
-    api.health().then(setHealth).catch(() => setHealth(null));
-    const interval = setInterval(() => {
+    setKeysConfigured(hasStoredKeys());
+
+    const fetchHealth = () => {
       api.health().then(setHealth).catch(() => setHealth(null));
-    }, 30000);
+    };
+    fetchHealth();
+    const interval = setInterval(fetchHealth, 30000);
     return () => clearInterval(interval);
   }, []);
 
   const isConnected = health?.pinecone === 'connected' && health?.openai === 'connected';
 
   return (
-    <header className="h-12 flex items-center justify-between px-4 border-b glass"
-            style={{ borderColor: 'var(--border-default)' }}>
-      {/* Left: Logo */}
+    <header className="h-12 flex items-center justify-between px-4 border-b glass shrink-0"
+            style={{ borderColor: 'var(--border-default)', zIndex: 40, position: 'relative' }}>
+
+      {/* Left: Logo + Brand */}
       <div className="flex items-center gap-3">
-        <Zap className="w-5 h-5" style={{ color: 'var(--accent-emerald)' }} />
-        <span className="font-semibold text-sm tracking-wide" style={{ color: 'var(--text-primary)' }}>
-          LEASESIGHT
-        </span>
-        <span className="text-xs px-2 py-0.5 rounded-full"
-              style={{ background: 'rgba(16, 185, 129, 0.15)', color: 'var(--accent-emerald)' }}>
-          v2.0
+        <div className="flex items-center gap-2">
+          <Zap className="w-4 h-4" style={{ color: 'var(--accent-emerald)' }} />
+          <span className="font-bold text-sm tracking-widest" style={{
+            color: 'var(--text-primary)',
+            background: 'var(--brand-gradient)',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            backgroundClip: 'text',
+          }}>
+            LEASESIGHT
+          </span>
+        </div>
+        <span className="text-[10px] px-2 py-0.5 rounded-full font-medium"
+              style={{ background: 'rgba(5,150,105,0.12)', color: 'var(--accent-emerald)' }}>
+          v3.0
         </span>
       </div>
 
       {/* Center: Search */}
       <div className="relative">
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg w-72"
-             style={{ background: 'var(--bg-card)', border: '1px solid var(--border-default)' }}>
-          <Search className="w-3.5 h-3.5" style={{ color: 'var(--text-secondary)' }} />
-          <input 
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg w-72 transition-all"
+             style={{
+               background: 'var(--bg-card)',
+               border: isSearchFocused
+                 ? '1px solid var(--accent-primary-light)'
+                 : '1px solid var(--border-default)',
+               boxShadow: isSearchFocused ? 'var(--shadow-glow)' : 'none',
+             }}>
+          <Search className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--text-secondary)' }} />
+          <input
             type="text"
-            placeholder="Search documents..."
+            placeholder="Search documents…"
             className="text-xs bg-transparent outline-none flex-1"
             style={{ color: 'var(--text-primary)' }}
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={e => setSearchQuery(e.target.value)}
             onFocus={() => setIsSearchFocused(true)}
             onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
           />
-          <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded"
-                style={{ background: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>
+          <kbd className="text-[10px] px-1.5 py-0.5 rounded hidden sm:block"
+               style={{ background: 'var(--bg-primary)', color: 'var(--text-muted)', border: '1px solid var(--border-default)' }}>
             ⌘K
-          </span>
+          </kbd>
         </div>
+
+        {/* Dropdown Results */}
         {isSearchFocused && searchQuery && (
-          <div className="absolute top-full mt-1 w-full rounded-lg shadow-lg overflow-hidden z-50 border"
-               style={{ background: 'var(--bg-card)', borderColor: 'var(--border-default)' }}>
-            {documents.filter(d => d.toLowerCase().includes(searchQuery.toLowerCase())).slice(0, 5).map(doc => (
-              <button
-                key={doc}
-                onMouseDown={() => {
-                  onSelectDoc(doc);
-                  setSearchQuery('');
-                  setIsSearchFocused(false);
-                }}
-                className="w-full text-left px-3 py-2 text-xs transition-colors truncate"
-                style={{ color: 'var(--text-primary)', background: 'var(--bg-card)' }}
-              >
-                {doc}
-              </button>
-            ))}
+          <div className="absolute top-full mt-1 w-full rounded-xl shadow-lg overflow-hidden z-50 border animate-fade-in"
+               style={{ background: 'var(--bg-card)', borderColor: 'var(--border-default)', boxShadow: 'var(--shadow-lg)' }}>
+            {documents
+              .filter(d => d.toLowerCase().includes(searchQuery.toLowerCase()))
+              .slice(0, 5)
+              .map(doc => (
+                <button
+                  key={doc}
+                  onMouseDown={() => { onSelectDoc(doc); setSearchQuery(''); setIsSearchFocused(false); }}
+                  className="w-full text-left px-3 py-2 text-xs transition-colors truncate hover:opacity-80"
+                  style={{ color: 'var(--text-primary)', background: 'var(--bg-card)' }}
+                >
+                  {doc}
+                </button>
+              ))}
+            {documents.filter(d => d.toLowerCase().includes(searchQuery.toLowerCase())).length === 0 && (
+              <div className="px-3 py-2 text-xs" style={{ color: 'var(--text-muted)' }}>No documents found</div>
+            )}
           </div>
         )}
       </div>
 
-      {/* Right: Status */}
-      <div className="flex items-center gap-4">
+      {/* Right: Status + Controls */}
+      <div className="flex items-center gap-3">
         {/* Network Graph Toggle */}
-        <button onClick={onToggleNetwork}
-                className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-md transition-colors hover:opacity-80"
-                style={{ color: 'var(--text-secondary)' }}>
+        <button
+          onClick={onToggleNetwork}
+          className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg transition-all hover:opacity-80"
+          style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-card)' }}
+        >
           <Network className="w-3.5 h-3.5" />
-          3D Map
+          <span className="hidden sm:inline">3D Map</span>
         </button>
 
         {/* Agent Activity */}
         <div className="flex items-center gap-1.5">
-          {isAuditing ? (
-            <>
-              <Activity className="w-3.5 h-3.5 animate-pulse" style={{ color: 'var(--accent-emerald)' }} />
-              <span className="text-xs" style={{ color: 'var(--accent-emerald)' }}>Agents Active</span>
-            </>
-          ) : (
-            <>
-              <Activity className="w-3.5 h-3.5" style={{ color: 'var(--text-secondary)' }} />
-              <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>Idle</span>
-            </>
-          )}
+          <Activity
+            className={`w-3.5 h-3.5 ${isAuditing ? 'animate-pulse' : ''}`}
+            style={{ color: isAuditing ? 'var(--accent-emerald)' : 'var(--text-muted)' }}
+          />
+          <span className="text-xs hidden sm:inline"
+                style={{ color: isAuditing ? 'var(--accent-emerald)' : 'var(--text-muted)' }}>
+            {isAuditing ? 'Agents Active' : 'Idle'}
+          </span>
         </div>
 
         {/* System Health */}
         <div className="flex items-center gap-1.5">
-          {isConnected ? (
-            <>
-              <div className="w-2 h-2 rounded-full animate-pulse-dot" style={{ background: 'var(--accent-emerald)' }} />
-              <Wifi className="w-3.5 h-3.5" style={{ color: 'var(--accent-emerald)' }} />
-            </>
-          ) : (
-            <>
-              <div className="w-2 h-2 rounded-full" style={{ background: 'var(--accent-red)' }} />
-              <WifiOff className="w-3.5 h-3.5" style={{ color: 'var(--accent-red)' }} />
-            </>
-          )}
+          <div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'animate-pulse-dot' : ''}`}
+               style={{ background: isConnected ? 'var(--accent-emerald)' : 'var(--accent-red)' }} />
+          {isConnected
+            ? <Wifi    className="w-3.5 h-3.5" style={{ color: 'var(--accent-emerald)' }} />
+            : <WifiOff className="w-3.5 h-3.5" style={{ color: 'var(--accent-red)' }} />}
         </div>
+
+        {/* Divider */}
+        <div className="w-px h-5" style={{ background: 'var(--border-default)' }} />
+
+        {/* Settings Link */}
+        <Link
+          href="/settings"
+          id="settings-nav-btn"
+          className="relative flex items-center justify-center w-7 h-7 rounded-lg transition-all hover:opacity-80"
+          style={{
+            background: keysConfigured ? 'var(--bg-card)' : 'rgba(220,38,38,0.08)',
+            border: keysConfigured ? '1px solid var(--border-default)' : '1px solid rgba(220,38,38,0.3)',
+          }}
+          title={keysConfigured ? 'API Settings' : 'API keys not configured — click to set up'}
+        >
+          {keysConfigured
+            ? <Settings className="w-3.5 h-3.5" style={{ color: 'var(--text-secondary)' }} />
+            : <KeyRound  className="w-3.5 h-3.5" style={{ color: 'var(--accent-red)' }} />}
+          {/* Red dot for unconfigured */}
+          {!keysConfigured && (
+            <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full"
+                  style={{ background: 'var(--accent-red)' }} />
+          )}
+        </Link>
       </div>
     </header>
   );
