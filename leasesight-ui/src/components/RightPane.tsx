@@ -8,11 +8,8 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
-// Configure PDF.js worker to use the local bundle
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString();
+// Configure PDF.js worker using unpkg CDN with explicit HTTPS
+pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 interface RightPaneProps {
   selectedDoc: string | null;
@@ -38,10 +35,15 @@ export function RightPane({ selectedDoc, annotations, targetPage }: RightPanePro
   // Resize observer for page-specific scaling
   useEffect(() => {
     if (!containerRef.current) return;
+    
+    // Initial width
+    const cw = containerRef.current.clientWidth;
+    setContainerWidth(cw > 32 ? cw - 32 : 600);
+
     const observer = new ResizeObserver((entries) => {
       if (entries[0]) {
-        // Leave some padding
-        setContainerWidth(entries[0].contentRect.width - 32); 
+        const w = entries[0].contentRect.width;
+        setContainerWidth(w > 32 ? w - 32 : 600);
       }
     });
     observer.observe(containerRef.current);
@@ -87,6 +89,11 @@ export function RightPane({ selectedDoc, annotations, targetPage }: RightPanePro
         className="flex-1 overflow-y-auto relative max-h-[800px] p-4 flex justify-center"
         style={{ background: '#1a1a2e' }}
       >
+        {pdfUrl && containerWidth <= 0 && (
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-white text-xs">
+            Calculating layout dimensions...
+          </div>
+        )}
         {pdfUrl && containerWidth > 0 && (
           <div className="relative shadow-xl" style={{ width: containerWidth }}>
             <Document 

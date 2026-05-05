@@ -9,21 +9,29 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Clients
-# CORRECT: Passing the names of the variables defined in your .env file
-# Use the NAMES of the variables in your .env, not the actual values
-client_azure = DocumentAnalysisClient(
-    endpoint=os.getenv("AZURE_ENDPOINT"), 
-    credential=AzureKeyCredential(os.getenv("AZURE_KEY"))
-)
-client_openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-index = pc.Index("leasesight-index")
 
-def process_new_pdf(pdf_path, file_name):
-    # 1. Azure Mapping (Day 1)
+def process_new_pdf(pdf_path, file_name, openai_client=None, pinecone_index=None, azure_client=None):
+    """
+    Process a PDF: Azure layout analysis → OpenAI embeddings → Pinecone upsert → JSON spatial map.
+
+    Clients are injected by the API layer (from request headers).
+    Falls back to .env values if not provided, for local/dev use.
+    """
+    # --- Client Resolution (Dependency Injection with .env fallback) ---
+    if azure_client is None:
+        azure_client = DocumentAnalysisClient(
+            endpoint=os.getenv("AZURE_ENDPOINT"),
+            credential=AzureKeyCredential(os.getenv("AZURE_KEY"))
+        )
+    if openai_client is None:
+        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    if pinecone_index is None:
+        pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+        pinecone_index = pc.Index("leasesight-index")
+
+    # 1. Azure Layout Analysis
     with open(pdf_path, "rb") as f:
-        poller = client_azure.begin_analyze_document("prebuilt-layout", f)
+        poller = azure_client.begin_analyze_document("prebuilt-layout", f)
         result = poller.result()
 
     spatial_data = {"file_name": file_name, "pages": []}
@@ -36,24 +44,26 @@ def process_new_pdf(pdf_path, file_name):
                 "bounding_box": [{"x": p.x, "y": p.y} for p in line.polygon]
             })
             page_text += line.content + " "
-        
+
         spatial_data["pages"].append({"page_number": page.page_number, "lines": lines})
 
-        # 2. OpenAI & Pinecone Indexing (Day 2)
-        emb_res = client_openai.embeddings.create(input=page_text, model="text-embedding-3-small")
+        # 2. OpenAI Embedding + Pinecone Upsert
+        emb_res = openai_client.embeddings.create(input=page_text, model="text-embedding-3-small")
         vector = emb_res.data[0].embedding
-        
+
         metadata = {
             "file_name": file_name,
             "page_number": page.page_number,
             "text": page_text[:2000],
             "coords": json.dumps(lines[0]['bounding_box'] if lines else [])
         }
-        index.upsert(vectors=[(f"{file_name}_p{page.page_number}", vector, metadata)])
+        pinecone_index.upsert(vectors=[(f"{file_name}_p{page.page_number}", vector, metadata)])
 
-    # Save JSON map for Day 4 Visuals
-    json_path = Path(r"C:\Users\zain\OneDrive\Desktop\LeaseSight\data\json_maps") / f"{file_name}.json"
+    # 3. Save JSON spatial map for visual grounding
+    BASE_DIR = Path(__file__).resolve().parents[1]
+    json_path = BASE_DIR / "data" / "json_maps" / f"{file_name}.json"
+    json_path.parent.mkdir(parents=True, exist_ok=True)
     with open(json_path, "w") as f:
         json.dump(spatial_data, f, indent=4)
-    
+
     return json_path

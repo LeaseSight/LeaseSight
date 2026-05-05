@@ -8,22 +8,17 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from pinecone import Pinecone
 
-# --- IMPORT FALLBACK ---
 sys.path.append(os.path.join(os.getcwd(), "scripts"))
 
-# Load environment variables (API Keys)
 load_dotenv()
 
 # --- CONTEXT LIMIT SAFETY ---
-# Maximum characters sent to Agent 1 to prevent API timeouts on massive documents
 CONTEXT_CHAR_LIMIT = 15000
 
 # ============================================================================
 # AGENT PROMPTS
 # ============================================================================
 
-# --- AGENT 1: THE MINER ---
-# High-fidelity extraction with mandatory evidence_quote for Feature 2 handshake
 MINER_PROMPT = """
 You are "The Miner," a Senior Legal Data Extractor with forensic precision.
 Your SOLE job is to extract every critical data point from the contract text below.
@@ -52,8 +47,6 @@ Example:
 }
 """
 
-# --- AGENT 2: THE JUDGE ---
-# Critical review for Red Flags: date conflicts, missing parties, logical errors
 JUDGE_PROMPT = """
 You are "The Judge," a Legal Risk Analyst. You receive extracted findings from a contract and a "Market Context" sample of standard precedents from our verified archive.
 
@@ -79,8 +72,6 @@ Return ONLY a JSON object:
 If no issues are found, return: {"risk_score": 1, "warnings": []}
 """
 
-# --- AGENT 3: THE CLERK ---
-# Final synthesizer — merges Miner + Judge output into the canonical format
 CLERK_PROMPT = """
 You are "The Clerk," a Legal Document Synthesizer. You receive:
 1. Extracted findings and obligations from the Miner (with evidence_quote for each field).
@@ -101,23 +92,15 @@ CRITICAL RULES:
 Return ONLY the JSON object.
 """
 
-# ============================================================================
-# INITIALIZATION
-# ============================================================================
-
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-index = pc.Index("leasesight-index")
-
 
 # ============================================================================
 # AGENT FUNCTIONS
 # ============================================================================
 
-def _call_agent(system_prompt, user_content, agent_name="Agent"):
+def _call_agent(system_prompt, user_content, agent_name="Agent", openai_client=None):
     """Shared helper to call an LLM agent with JSON output."""
     try:
-        response = client.chat.completions.create(
+        response = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -131,54 +114,48 @@ def _call_agent(system_prompt, user_content, agent_name="Agent"):
         return None
 
 
-def agent_miner(context_text):
+def agent_miner(context_text, openai_client):
     """Agent 1: Extract all findings with evidence_quotes."""
     print("[MINER] Extracting data points...")
-    # Apply context limit safety
     truncated = context_text[:CONTEXT_CHAR_LIMIT]
     result = _call_agent(
         MINER_PROMPT,
         f"Extract all critical data from this contract:\n\n{truncated}",
-        "MINER"
+        "MINER",
+        openai_client=openai_client
     )
     if result:
-        findings_count = len(result.get('findings', []))
-        print(f"[MINER] Extracted {findings_count} data points.")
+        print(f"[MINER] Extracted {len(result.get('findings', []))} data points.")
     return result or {"findings": []}
 
 
-def agent_judge(miner_output, market_context):
-    """Agent 2: Evaluate findings for red flags and assign risk score against market standard."""
+def agent_judge(miner_output, market_context, openai_client):
+    """Agent 2: Evaluate findings for red flags and assign risk score."""
     print("[JUDGE] Reviewing for red flags against market standard...")
-    input_content = json.dumps({
-        "findings": miner_output,
-        "market_context": market_context
-    }, indent=2)
+    input_content = json.dumps({"findings": miner_output, "market_context": market_context}, indent=2)
     result = _call_agent(
         JUDGE_PROMPT,
         f"Review these extracted contract findings against the market precedents:\n\n{input_content}",
-        "JUDGE"
+        "JUDGE",
+        openai_client=openai_client
     )
     if result:
         print(f"[JUDGE] Risk Score: {result.get('risk_score', '?')}, Warnings: {len(result.get('warnings', []))}")
     return result or {"risk_score": 1, "warnings": []}
 
 
-def agent_clerk(miner_output, judge_output):
+def agent_clerk(miner_output, judge_output, openai_client):
     """Agent 3: Synthesize the final report — preserving evidence_quotes."""
     print("[CLERK] Synthesizing final report...")
-    combined_input = json.dumps({
-        "miner_findings": miner_output,
-        "judge_assessment": judge_output
-    }, indent=2)
+    combined_input = json.dumps({"miner_findings": miner_output, "judge_assessment": judge_output}, indent=2)
     result = _call_agent(
         CLERK_PROMPT,
         f"Produce the final audit report from these agent outputs:\n\n{combined_input}",
-        "CLERK"
+        "CLERK",
+        openai_client=openai_client
     )
     if result:
         print(f"[CLERK] Final report ready. Findings: {len(result.get('findings', []))}")
-    # Fallback: assemble manually if the Clerk fails
     if not result:
         result = {
             "findings": miner_output.get("findings", []),
@@ -194,25 +171,31 @@ def agent_clerk(miner_output, judge_output):
 # MAIN ORCHESTRATOR
 # ============================================================================
 
-def run_full_audit(target_file):
+def run_full_audit(target_file, openai_client=None, pinecone_index=None):
     """
-    Multi-Agent Audit Pipeline:
-    1. Retrieve top 15 segments from Pinecone (sorted by page).
-    2. Agent 1 (Miner): Extract findings + evidence_quotes.
-    3. Agent 2 (Judge): Review for red flags, assign risk_score.
-    4. Agent 3 (Clerk): Synthesize final JSON with all fields preserved.
+    Multi-Agent Audit Pipeline: Miner → Judge → Clerk.
+
+    Clients are injected by the API layer (from request headers).
+    Falls back to .env values if not provided, for local/dev use.
     """
+    # --- Client Resolution (Dependency Injection with .env fallback) ---
+    if openai_client is None:
+        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    if pinecone_index is None:
+        pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+        pinecone_index = pc.Index("leasesight-index")
+
     print(f"--- STARTING MULTI-AGENT AUDIT FOR: {target_file} ---")
 
     # 1. Broad Retrieval from Pinecone
     try:
-        res = client.embeddings.create(
+        res = openai_client.embeddings.create(
             input=["Parties involved, rent details, address, and legal obligations"],
             model="text-embedding-3-small"
         )
         query_vector = res.data[0].embedding
 
-        results = index.query(
+        results = pinecone_index.query(
             vector=query_vector,
             top_k=15,
             filter={"file_name": {"$eq": target_file}},
@@ -223,29 +206,26 @@ def run_full_audit(target_file):
             print("No matching segments found in database.")
             return None
 
-        # Sequential Context Sorting
         sorted_matches = sorted(
             results['matches'],
             key=lambda x: x['metadata'].get('page_number', 0)
         )
-
         context = "\n".join([
             f"Page {m['metadata']['page_number']}: {m['metadata']['text']}"
             for m in sorted_matches
         ])
-
     except Exception as e:
         print(f"Pinecone Retrieval Error: {e}")
         return None
 
-    # 2. Pinecone query for Market Context
+    # 2. Market Context from Pinecone
     try:
-        market_res = client.embeddings.create(
+        market_res = openai_client.embeddings.create(
             input=["Standard lease termination, security deposit, and renewal clauses"],
             model="text-embedding-3-small"
         )
         market_vec = market_res.data[0].embedding
-        market_results = index.query(
+        market_results = pinecone_index.query(
             vector=market_vec,
             top_k=5,
             filter={"file_name": {"$ne": target_file}},
@@ -262,9 +242,9 @@ def run_full_audit(target_file):
         market_context = "Market context unavailable."
 
     # 3. PIPELINE: Miner → Judge → Clerk
-    miner_output = agent_miner(context)
-    judge_output = agent_judge(miner_output, market_context)
-    final_report = agent_clerk(miner_output, judge_output)
+    miner_output = agent_miner(context, openai_client)
+    judge_output = agent_judge(miner_output, market_context, openai_client)
+    final_report = agent_clerk(miner_output, judge_output, openai_client)
 
     print(f"--- AUDIT COMPLETE: {len(final_report.get('findings', []))} findings, "
           f"Risk: {final_report.get('risk_score', '?')}/10 ---")
@@ -273,7 +253,6 @@ def run_full_audit(target_file):
 
 
 if __name__ == "__main__":
-    # Test execution
     test_target = "ABILITYINC_06_15_2020-EX-4.25-SERVICES AGREEMENT.PDF"
     report = run_full_audit(test_target)
     if report:
