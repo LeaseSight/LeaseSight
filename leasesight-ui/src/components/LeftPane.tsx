@@ -170,7 +170,7 @@ export function LeftPane({
             Upload PDF
           </button>
           
-          <a href="http://localhost:8000/api/audit-log" download className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-all hover:bg-gray-100" style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)' }}>
+          <a href={api.auditLogUrl()} download className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-all hover:bg-gray-100" style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)' }}>
             <Download className="w-3.5 h-3.5" />
             Audit Log
           </a>

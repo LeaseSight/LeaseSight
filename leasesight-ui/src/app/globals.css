@@ -50,7 +50,8 @@ html, body {
   height: 100%;
   margin: 0;
   padding: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: var(--bg-primary);
   color: var(--text-primary);
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
@@ -60,7 +61,8 @@ html, body {
 
 /* Settings page needs scroll */
 .settings-bg {
-  overflow-y: auto !important;
+  min-height: 100vh;
+  overflow-y: visible !important;
   background: var(--bg-primary);
 }
 

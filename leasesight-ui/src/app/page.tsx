@@ -1,115 +1,93 @@
 'use client';
 
-import { useState, useCallback } from 'react';
-import { Header } from '@/components/Header';
-import { LeftPane } from '@/components/LeftPane';
-import dynamic from 'next/dynamic';
+import Link from 'next/link';
+import { ArrowRight, Zap, ShieldCheck, BarChart3, Globe } from 'lucide-react';
 
-const RightPane = dynamic(() => import('@/components/RightPane').then(mod => mod.RightPane), { 
-  ssr: false, 
-  loading: () => <div className="flex-1 flex flex-col items-center justify-center bg-[#1a1a2e] text-white text-xs">Loading Document Engine...</div> 
-});
-import { ChatOverlay } from '@/components/ChatOverlay';
-import { NetworkPanel } from '@/components/NetworkPanel';
-import { AuditResult, Annotation } from '@/lib/types';
-import { useEffect } from 'react';
-
-export default function Home() {
-  const [selectedDoc, setSelectedDoc] = useState<string | null>(null);
-  const [auditResult, setAuditResult] = useState<AuditResult | null>(null);
-  const [annotations, setAnnotations] = useState<Annotation[]>([]);
-  const [targetPage, setTargetPage] = useState<number>(1);
-  const [isAuditing, setIsAuditing] = useState(false);
-  const [showNetwork, setShowNetwork] = useState(false);
-  const [isCommitted, setIsCommitted] = useState(false);
-  const [networkQuery, setNetworkQuery] = useState<string | undefined>(undefined);
-  const [documents, setDocuments] = useState<string[]>([]);
-
-  // Fetch documents on load
-  useEffect(() => {
-    import('@/lib/api').then(({ api }) => {
-      api.documents().then(d => setDocuments(d.documents)).catch(() => {});
-    });
-  }, []);
-
-  const handleLocate = useCallback((annotation: Annotation) => {
-    setAnnotations([annotation]);
-    setTargetPage(annotation.page);
-  }, []);
-
-  const handleMapQuery = useCallback((query: string) => {
-    setNetworkQuery(query);
-    setShowNetwork(true);
-  }, []);
-
-  const handleAuditComplete = useCallback((result: AuditResult) => {
-    setAuditResult(result);
-    setAnnotations(result.annotations || []);
-    setIsAuditing(false);
-  }, []);
-
+export default function LandingPage() {
   return (
-    <div className="h-screen flex flex-col overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
-      {/* Global Header */}
-      <Header
-        isAuditing={isAuditing}
-        onToggleNetwork={() => {
-          setShowNetwork(!showNetwork);
-          setNetworkQuery(undefined);
-        }}
-        documents={documents}
-        onSelectDoc={setSelectedDoc}
-      />
+    <div className="min-h-screen relative overflow-hidden flex flex-col items-center justify-center p-6 bg-[#030712]">
+      
+      {/* Background Mesh Gradient */}
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-purple-900/20 blur-[120px]" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-blue-900/20 blur-[120px]" />
+      </div>
 
-      {/* Dual-Pane Workstation */}
-      <div className="flex-1 flex min-h-0">
-        {/* Left Pane — Auditor */}
-        <div className="w-[480px] min-w-[400px] flex flex-col border-r"
-             style={{ borderColor: 'var(--border-default)', background: 'var(--bg-secondary)' }}>
-          <LeftPane
-            documents={documents}
-            setDocuments={setDocuments}
-            selectedDoc={selectedDoc}
-            onSelectDoc={setSelectedDoc}
-            auditResult={auditResult}
-            onAuditStart={() => setIsAuditing(true)}
-            onAuditComplete={handleAuditComplete}
-            onLocate={handleLocate}
-            onCommitChange={setIsCommitted}
-          />
+      {/* Hero Section */}
+      <div className="relative z-10 max-w-5xl w-full text-center space-y-8 animate-in fade-in slide-in-from-bottom-8 duration-1000">
+        
+        {/* Badge */}
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-white/10 bg-white/5 backdrop-blur-md">
+          <Globe className="w-3 h-3 text-purple-400" />
+          <span className="text-[10px] uppercase tracking-widest text-white/70 font-mono">Global Contract Intelligence v3.0</span>
         </div>
 
-        {/* Right Pane — Viewer */}
-        <div className="flex-1 flex flex-col min-w-0" style={{ background: 'var(--bg-primary)' }}>
-          <RightPane
-            selectedDoc={selectedDoc}
-            annotations={annotations}
-            targetPage={targetPage}
+        {/* Headline */}
+        <h1 className="text-5xl md:text-8xl font-bold tracking-tight text-white font-sans">
+          LeaseSight: The <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-400 via-blue-400 to-emerald-400">Visual Proof-Chain</span> for Global Contracts.
+        </h1>
+
+        {/* Sub-headline */}
+        <p className="text-lg md:text-xl text-white/50 max-w-2xl mx-auto font-mono">
+          Intelligent contract analysis powered by multi-agent AI orchestration. 
+          Audit, visualize, and secure your legal obligations with surgical precision.
+        </p>
+
+        {/* CTA Section */}
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
+          <Link 
+            href="/dashboard"
+            className="group relative px-8 py-4 rounded-2xl bg-white text-black font-semibold overflow-hidden transition-all hover:scale-105 active:scale-95"
+          >
+            <div className="absolute inset-0 bg-gradient-to-r from-purple-600 to-blue-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+            <span className="relative z-10 group-hover:text-white flex items-center gap-2">
+              Launch Auditor <ArrowRight className="w-4 h-4" />
+            </span>
+          </Link>
+          <Link 
+            href="/settings"
+            className="px-8 py-4 rounded-2xl border border-white/10 bg-white/5 backdrop-blur-md text-white/80 font-semibold transition-all hover:bg-white/10"
+          >
+            Configure Keys
+          </Link>
+        </div>
+
+        {/* Feature Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-16 max-w-4xl mx-auto">
+          <FeatureCard 
+            icon={<Zap className="w-5 h-5 text-yellow-400" />}
+            title="Surgical Extraction"
+            desc="AI-driven data mining with visual coordinate grounding."
+          />
+          <FeatureCard 
+            icon={<ShieldCheck className="w-5 h-5 text-emerald-400" />}
+            title="Proof-Chain Audit"
+            desc="Cross-validated finding logic for enterprise compliance."
+          />
+          <FeatureCard 
+            icon={<BarChart3 className="w-5 h-5 text-blue-400" />}
+            title="3D Analytics"
+            desc="Vector-based similarity mapping for entire portfolios."
           />
         </div>
       </div>
 
-      {/* Bottom Network Panel (retractable) */}
-      {showNetwork && selectedDoc && (
-        <NetworkPanel
-          selectedDoc={selectedDoc}
-          onClose={() => {
-            setShowNetwork(false);
-            setNetworkQuery(undefined);
-          }}
-          isCommitted={isCommitted}
-          query={networkQuery}
-        />
-      )}
+      {/* Footer */}
+      <footer className="absolute bottom-8 text-white/20 text-[10px] tracking-widest font-mono">
+        SECURED BY CLIENT-SIDE ENCRYPTION • BYOK ARCHITECTURE
+      </footer>
+    </div>
+  );
+}
 
-      {/* Chat Overlay */}
-      {selectedDoc && (
-        <ChatOverlay
-          selectedDoc={selectedDoc}
-          onLocate={handleLocate}
-          onMapQuery={handleMapQuery}
-        />
-      )}
+function FeatureCard({ icon, title, desc }: { icon: React.ReactNode; title: string; desc: string }) {
+  return (
+    <div className="p-6 rounded-2xl border border-white/5 bg-white/5 backdrop-blur-xl text-left space-y-3 transition-all hover:border-white/20">
+      <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center border border-white/10">
+        {icon}
+      </div>
+      <h3 className="text-white font-semibold text-sm">{title}</h3>
+      <p className="text-white/40 text-xs leading-relaxed">{desc}</p>
     </div>
   );
 }

@@ -1,7 +1,8 @@
 # api/main.py — LeaseSight FastAPI Backend v3.0
 # Keys accepted via request headers; falls back to .env for local development.
 
-import os, sys, json
+import os, sys, json, sqlite3, hashlib
+from datetime import datetime
 import numpy as np
 from pathlib import Path
 from typing import Optional
@@ -9,6 +10,7 @@ from typing import Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -29,14 +31,37 @@ from azure.ai.formrecognizer import DocumentAnalysisClient
 from azure.core.credentials import AzureKeyCredential
 
 # ---------------------------------------------------------------------------
+# DATABASE INITIALIZATION (SaaS History Tracking)
+# ---------------------------------------------------------------------------
+DB_PATH = BASE_DIR / "leasesight.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS audit_logs
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  timestamp TEXT,
+                  user_hash TEXT,
+                  file_name TEXT,
+                  lessor_lessee TEXT,
+                  rent TEXT,
+                  risk_score TEXT,
+                  key_terms TEXT)''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# ---------------------------------------------------------------------------
 app = FastAPI(title="LeaseSight API", version="3.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 RAW_PDF_DIR = BASE_DIR / "data" / "raw_pdfs"
@@ -52,10 +77,11 @@ DPI = 1.0  # Emit raw Azure inches for frontend formula
 # ===========================================================================
 
 class ClientBundle:
-    def __init__(self, openai_client, pinecone_index, azure_client):
+    def __init__(self, openai_client, pinecone_index, azure_client, user_hash):
         self.openai = openai_client
         self.pinecone = pinecone_index
         self.azure = azure_client
+        self.user_hash = user_hash
 
 
 def get_clients(request: Request) -> ClientBundle:
@@ -95,7 +121,10 @@ def get_clients(request: Request) -> ClientBundle:
         except Exception:
             raise HTTPException(status_code=401, detail="Invalid Azure credentials. Please check your Settings.")
 
-    return ClientBundle(oai, pc_index, azure_client)
+    # Calculate a unique hash for this user to keep their history private/separate
+    user_hash = hashlib.sha256(openai_key.encode()).hexdigest()[:12]
+
+    return ClientBundle(oai, pc_index, azure_client, user_hash)
 
 
 # ===========================================================================
@@ -154,12 +183,22 @@ async def list_documents():
     return {"documents": pdfs, "count": len(pdfs)}
 
 
-@app.get("/api/pdf/{filename:path}")
+@app.get("/pdfs/{filename:path}")
 async def serve_pdf(filename: str):
-    pdf_path = RAW_PDF_DIR / filename
-    if not pdf_path.exists():
+    """
+    Manually serve PDFs with explicit CORS headers to bypass StaticFiles middleware issues.
+    This ensures the PDF viewer in the frontend can fetch the binary document.
+    """
+    target_path = RAW_PDF_DIR / filename
+    if not target_path.exists():
         raise HTTPException(status_code=404, detail="PDF not found")
-    return FileResponse(str(pdf_path), media_type="application/pdf")
+    
+    return FileResponse(
+        str(target_path),
+        media_type="application/pdf"
+    )
+
+# ... (end of serve_pdf)
 
 
 @app.get("/api/index-status/{filename:path}")
@@ -222,23 +261,26 @@ async def run_audit(request: AuditRequest, clients: ClientBundle = Depends(get_c
                     })
         results["annotations"] = annotations
 
+        # Log to SQLite (SaaS History)
         try:
-            import pandas as pd, datetime
-            excel_path = BASE_DIR / "audit_log.xlsx"
-            df = pd.read_excel(excel_path) if excel_path.exists() else pd.DataFrame()
             findings_dict = {f.get('label'): f.get('value') for f in results.get('findings', [])}
-            log_data = {
-                'Timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                'File_Name': request.file_name,
-                'Lessor/Lessee': findings_dict.get('Parties', findings_dict.get('Tenant/Landlord', 'Unknown')),
-                'Rent': findings_dict.get('Monthly Rent', 'Unknown'),
-                'Risk_Score': results.get('risk_score', 'N/A'),
-                'Key_Terms': ', '.join([f"{k}: {v}" for k, v in findings_dict.items()][:5])
-            }
-            df = pd.concat([df, pd.DataFrame([log_data])], ignore_index=True)
-            df.to_excel(excel_path, index=False)
+            log_data = (
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                clients.user_hash,
+                request.file_name,
+                str(findings_dict.get('Parties', findings_dict.get('Tenant/Landlord', 'Unknown'))),
+                str(findings_dict.get('Monthly Rent', 'Unknown')),
+                str(results.get('risk_score', 'N/A')),
+                ', '.join([f"{k}: {v}" for k, v in findings_dict.items()][:5])
+            )
+            
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("INSERT INTO audit_logs (timestamp, user_hash, file_name, lessor_lessee, rent, risk_score, key_terms) VALUES (?,?,?,?,?,?,?)", log_data)
+            conn.commit()
+            conn.close()
         except Exception as e:
-            print(f"Excel Logging Error: {e}")
+            print(f"SQL Logging Error: {e}")
 
         return results
     except HTTPException:
@@ -394,13 +436,34 @@ async def generate_calendar(request: CalendarRequest):
 
 
 @app.get("/api/audit-log")
-async def download_audit_log():
-    excel_path = BASE_DIR / "audit_log.xlsx"
-    if not excel_path.exists():
-        raise HTTPException(status_code=404, detail="Audit log not found")
-    return FileResponse(str(excel_path),
-                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        filename="audit_log.xlsx")
+async def download_audit_log(clients: ClientBundle = Depends(get_clients)):
+    """
+    Returns a CSV of the user's history from the SQLite database.
+    Filtered by user_hash to ensure privacy in a SaaS model.
+    """
+    import csv, io
+    from fastapi.responses import StreamingResponse
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT timestamp, file_name, lessor_lessee, rent, risk_score, key_terms FROM audit_logs WHERE user_hash = ?", (clients.user_hash,))
+    rows = c.fetchall()
+    conn.close()
+    
+    if not rows:
+        raise HTTPException(status_code=404, detail="No audit history found for your account.")
+        
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['Timestamp', 'File Name', 'Lessor/Lessee', 'Rent', 'Risk Score', 'Key Terms'])
+    writer.writerows(rows)
+    output.seek(0)
+    
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode('utf-8')),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=audit_history.csv"}
+    )
 
 
 @app.post("/api/export/{file_name:path}")

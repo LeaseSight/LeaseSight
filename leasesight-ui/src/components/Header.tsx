@@ -36,7 +36,7 @@ export function Header({ isAuditing, onToggleNetwork, documents, onSelectDoc }: 
             style={{ borderColor: 'var(--border-default)', zIndex: 40, position: 'relative' }}>
 
       {/* Left: Logo + Brand */}
-      <div className="flex items-center gap-3">
+      <Link href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
         <div className="flex items-center gap-2">
           <Zap className="w-4 h-4" style={{ color: 'var(--accent-emerald)' }} />
           <span className="font-bold text-sm tracking-widest" style={{
@@ -53,7 +53,7 @@ export function Header({ isAuditing, onToggleNetwork, documents, onSelectDoc }: 
               style={{ background: 'rgba(5,150,105,0.12)', color: 'var(--accent-emerald)' }}>
           v3.0
         </span>
-      </div>
+      </Link>
 
       {/* Center: Search */}
       <div className="relative">
@@ -142,25 +142,29 @@ export function Header({ isAuditing, onToggleNetwork, documents, onSelectDoc }: 
         {/* Divider */}
         <div className="w-px h-5" style={{ background: 'var(--border-default)' }} />
 
-        {/* Settings Link */}
+        {/* Settings / API Keys Link */}
         <Link
           href="/settings"
           id="settings-nav-btn"
-          className="relative flex items-center justify-center w-7 h-7 rounded-lg transition-all hover:opacity-80"
+          className="relative flex items-center gap-2 px-2.5 py-1.5 rounded-lg transition-all hover:opacity-80"
           style={{
-            background: keysConfigured ? 'var(--bg-card)' : 'rgba(220,38,38,0.08)',
-            border: keysConfigured ? '1px solid var(--border-default)' : '1px solid rgba(220,38,38,0.3)',
+            background: keysConfigured ? 'rgba(5,150,105,0.08)' : 'rgba(220,38,38,0.08)',
+            border: keysConfigured ? '1px solid rgba(5,150,105,0.3)' : '1px solid rgba(220,38,38,0.3)',
           }}
-          title={keysConfigured ? 'API Settings' : 'API keys not configured — click to set up'}
+          title={keysConfigured ? 'API Settings (Keys Configured)' : 'API keys not configured — click to set up'}
         >
           {keysConfigured
-            ? <Settings className="w-3.5 h-3.5" style={{ color: 'var(--text-secondary)' }} />
+            ? <Settings className="w-3.5 h-3.5" style={{ color: 'var(--accent-emerald)' }} />
             : <KeyRound  className="w-3.5 h-3.5" style={{ color: 'var(--accent-red)' }} />}
-          {/* Red dot for unconfigured */}
-          {!keysConfigured && (
-            <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full"
-                  style={{ background: 'var(--accent-red)' }} />
-          )}
+          
+          <span className="text-[10px] font-semibold tracking-wide hidden lg:inline"
+                style={{ color: keysConfigured ? 'var(--accent-emerald)' : 'var(--accent-red)' }}>
+            {keysConfigured ? 'API KEYS' : 'CONFIG API'}
+          </span>
+
+          {/* Status Dot */}
+          <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full"
+                style={{ background: keysConfigured ? 'var(--accent-emerald)' : 'var(--accent-red)' }} />
         </Link>
       </div>
     </header>

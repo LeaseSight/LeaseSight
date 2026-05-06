@@ -8,9 +8,6 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
-// Configure PDF.js worker using unpkg CDN
-pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
-
 const PAGE_WIDTH_INCHES  = 8.5;
 const PAGE_HEIGHT_INCHES = 11.0;
 
@@ -34,6 +31,11 @@ export function RightPane({ selectedDoc, annotations, targetPage }: RightPanePro
     [selectedDoc]
   );
 
+  // Initialize worker
+  useEffect(() => {
+    pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+  }, []);
+
   // Reset when document changes
   useEffect(() => {
     setNumPages(0);
@@ -54,14 +56,37 @@ export function RightPane({ selectedDoc, annotations, targetPage }: RightPanePro
   // Resize observer
   useEffect(() => {
     if (!containerRef.current) return;
-    const update = (w: number) => setContainerWidth(w > 48 ? w - 48 : 600);
-    update(containerRef.current.clientWidth);
+    
+    const update = () => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const w = rect.width;
+      if (w > 0) {
+        setContainerWidth(w > 48 ? w - 48 : 600);
+      } else {
+        // Absolute fallback to prevent hang
+        setContainerWidth(800);
+      }
+    };
+
+    // Force initial update
+    update();
+    
+    // Delayed fallback to ensure browser has painted
+    const timer = setTimeout(update, 300);
+
     const obs = new ResizeObserver(entries => {
-      if (entries[0]) update(entries[0].contentRect.width);
+      if (entries[0]) {
+        const w = entries[0].contentRect.width;
+        if (w > 0) setContainerWidth(w > 48 ? w - 48 : 600);
+      }
     });
     obs.observe(containerRef.current);
-    return () => obs.disconnect();
-  }, []);
+    return () => {
+      obs.disconnect();
+      clearTimeout(timer);
+    };
+  }, [selectedDoc]); // Important: re-run when doc is selected to catch the ref after mounting
 
   // Scroll spy — update currentPage indicator
   const handleScroll = useCallback(() => {
@@ -103,18 +128,24 @@ export function RightPane({ selectedDoc, annotations, targetPage }: RightPanePro
         return (
           <div
             key={i}
-            className="absolute z-10 pointer-events-none rounded-sm animate-pulse"
+            className="absolute z-10 pointer-events-none rounded-[2px] animate-pulse"
             style={{
               left:   `${pxX}px`,
               top:    `${pxY}px`,
               width:  `${pxW}px`,
               height: `${pxH}px`,
-              backgroundColor: `${color}33`,
-              border: `1.5px solid ${color}cc`,
-              boxShadow: `0 0 12px ${color}55`,
-              transition: 'all 0.4s ease',
+              backgroundColor: `${color}15`,
+              border: `1px solid ${color}ee`,
+              boxShadow: `0 0 15px ${color}44`,
+              transition: 'all 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
             }}
-          />
+          >
+            {/* Surgical Corner Accents */}
+            <div className="absolute top-0 left-0 w-1 h-1 border-t border-l" style={{ borderColor: color }} />
+            <div className="absolute top-0 right-0 w-1 h-1 border-t border-r" style={{ borderColor: color }} />
+            <div className="absolute bottom-0 left-0 w-1 h-1 border-b border-l" style={{ borderColor: color }} />
+            <div className="absolute bottom-0 right-0 w-1 h-1 border-b border-r" style={{ borderColor: color }} />
+          </div>
         );
       });
   };
@@ -210,8 +241,8 @@ export function RightPane({ selectedDoc, annotations, targetPage }: RightPanePro
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-6 flex flex-col items-center gap-4 min-h-0"
-        style={{ background: '#1a1a2e' }}
+        className="overflow-y-auto p-8 flex flex-col items-center gap-8 h-[calc(100vh-160px)] custom-scrollbar"
+        style={{ background: '#0a0a1a' }}
       >
         {pdfUrl && containerWidth > 0 && (
           <Document
@@ -219,12 +250,14 @@ export function RightPane({ selectedDoc, annotations, targetPage }: RightPanePro
             onLoadSuccess={({ numPages: n }) => setNumPages(n)}
             onLoadError={err => console.error('PDF load error:', err)}
             loading={
-              <div className="text-white text-sm text-center p-10 animate-pulse">Loading PDF engine…</div>
+              <div className="flex flex-col items-center justify-center p-20 space-y-4">
+                <div className="w-12 h-12 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin" />
+                <p className="text-white/40 text-xs font-mono tracking-widest animate-pulse">INITIALIZING PDF ENGINE</p>
+              </div>
             }
             error={
-              <div className="text-red-400 text-sm text-center p-10 rounded-xl"
-                   style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}>
-                Failed to load PDF. Check the network console.
+              <div className="text-red-400 text-sm text-center p-10 rounded-2xl bg-red-950/20 border border-red-500/20">
+                Failed to load document. Please check your network connection or API keys.
               </div>
             }
           >
@@ -232,7 +265,7 @@ export function RightPane({ selectedDoc, annotations, targetPage }: RightPanePro
               <div
                 key={pageNum}
                 ref={el => { if (el) pageRefs.current.set(pageNum, el); else pageRefs.current.delete(pageNum); }}
-                className="relative shadow-2xl rounded overflow-hidden"
+                className="relative shadow-[0_32px_64px_-12px_rgba(0,0,0,0.8)] rounded-lg overflow-hidden transition-transform duration-500 hover:scale-[1.01]"
                 style={{ width: pageWidth }}
               >
                 <Page
@@ -243,10 +276,9 @@ export function RightPane({ selectedDoc, annotations, targetPage }: RightPanePro
                 />
                 {renderAnnotations(pageNum)}
 
-                {/* Page number label */}
-                <div className="absolute bottom-2 right-2 text-[10px] px-2 py-0.5 rounded-full pointer-events-none"
-                     style={{ background: 'rgba(0,0,0,0.5)', color: 'rgba(255,255,255,0.7)' }}>
-                  {pageNum}
+                {/* Page number indicator */}
+                <div className="absolute top-4 right-4 text-[10px] px-3 py-1 rounded-full backdrop-blur-md bg-black/40 text-white/60 border border-white/5 pointer-events-none font-mono">
+                  PAGE {pageNum}
                 </div>
               </div>
             ))}
@@ -254,7 +286,7 @@ export function RightPane({ selectedDoc, annotations, targetPage }: RightPanePro
         )}
 
         {pdfUrl && containerWidth <= 0 && (
-          <div className="text-white text-xs animate-pulse">Calculating layout…</div>
+          <div className="text-white/20 text-[10px] font-mono tracking-[0.2em] animate-pulse">CALCULATING SPATIAL LAYOUT</div>
         )}
       </div>
     </div>

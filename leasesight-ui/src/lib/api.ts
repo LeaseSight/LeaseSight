@@ -139,7 +139,7 @@ export const api = {
       body: JSON.stringify({ file_name }),
     }),
 
-  pdfUrl: (filename: string) => `${API_BASE}/api/pdf/${encodeURIComponent(filename)}`,
+  pdfUrl: (filename: string) => `${API_BASE}/pdfs/${encodeURIComponent(filename)}`,
 
   upload: async (file: File) => {
     const keyHeaders = buildKeyHeaders();
@@ -179,4 +179,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ query, file_name }),
     }),
+
+  auditLogUrl: () => `${API_BASE}/api/audit-log`,
 };

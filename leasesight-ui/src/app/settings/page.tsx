@@ -87,10 +87,10 @@ export default function SettingsPage() {
     setter(s => ({ ...s, show: !s.show }));
 
   return (
-    <div className="min-h-screen settings-bg flex flex-col">
+    <div className="min-h-screen settings-bg flex flex-col overflow-visible">
       {/* ---- Top Nav ---- */}
-      <header className="h-14 flex items-center justify-between px-6 border-b settings-header">
-        <Link href="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+      <header className="h-14 flex items-center justify-between px-6 border-b settings-header sticky top-0 z-50">
+        <Link href="/dashboard" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
           <ArrowLeft className="w-4 h-4" style={{ color: 'var(--text-secondary)' }} />
           <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>Back to Dashboard</span>
         </Link>
@@ -244,7 +244,7 @@ export default function SettingsPage() {
         {/* Go to Dashboard */}
         {hasStoredKeys() && (
           <button
-            onClick={() => router.push('/')}
+            onClick={() => router.push('/dashboard')}
             className="w-full py-3 rounded-xl text-sm font-medium transition-all hover:opacity-80"
             style={{ color: 'var(--text-secondary)' }}
           >
