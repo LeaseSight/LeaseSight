@@ -49,8 +49,8 @@ export function LeftPane({
     try {
       const res = await api.upload(file);
       const docsRes = await api.documents();
-      setDocuments(docsRes.documents);
-      onSelectDoc(res.file_name);
+      setDocuments(docsRes.documents ?? []);
+      onSelectDoc(res.file_name ?? '');
     } catch (error) {
       console.error('Upload failed:', error);
     } finally {

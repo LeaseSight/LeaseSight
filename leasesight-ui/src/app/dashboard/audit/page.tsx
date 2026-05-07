@@ -18,7 +18,7 @@ export default function Home() {
   const [selectedDoc, setSelectedDoc] = useState<string | null>(null);
   const [auditResult, setAuditResult] = useState<AuditResult | null>(null);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
-  const [targetPage, setTargetPage] = useState<number>(1);
+  const [targetPage, setTargetPage] = useState<number | null>(1);
   const [isAuditing, setIsAuditing] = useState(false);
   const [showNetwork, setShowNetwork] = useState(false);
   const [isCommitted, setIsCommitted] = useState(false);
@@ -34,7 +34,7 @@ export default function Home() {
 
   const handleLocate = useCallback((annotation: Annotation) => {
     setAnnotations([annotation]);
-    setTargetPage(annotation.page);
+    setTargetPage(annotation.page ?? 1);
   }, []);
 
   const handleMapQuery = useCallback((query: string) => {

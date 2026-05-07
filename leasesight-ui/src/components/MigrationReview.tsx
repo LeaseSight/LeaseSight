@@ -34,7 +34,7 @@ export function MigrationReview({ batchId }: { batchId: string }) {
   const loadResults = async () => {
     try {
       const res = await api.getMigrationStatus(batchId);
-      setItems(res.results);
+      setItems(res.results ?? []);
     } catch (e) {
       console.error('Failed to load review items:', e);
     } finally {

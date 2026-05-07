@@ -35,8 +35,8 @@ export function MigrationDashboard() {
       interval = setInterval(async () => {
         try {
           const res = await api.getMigrationStatus(batchId);
-          setProgress({ total: res.total, processed: res.processed });
-          setResults(res.results);
+          setProgress({ total: res.total ?? 0, processed: res.processed ?? 0 });
+          setResults(res.results ?? []);
           if (res.status === 'completed') {
             setStatus('completed');
             clearInterval(interval);
@@ -63,7 +63,7 @@ export function MigrationDashboard() {
       const res = await api.startMigration(files);
       setBatchId(res.batch_id);
       setStatus('processing');
-      setProgress({ total: res.file_count, processed: 0 });
+      setProgress({ total: res.file_count ?? 0, processed: 0 });
     } catch (e: any) {
       setError(e.message);
       setStatus('error');

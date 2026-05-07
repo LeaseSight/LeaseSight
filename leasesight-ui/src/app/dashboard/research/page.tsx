@@ -18,7 +18,7 @@ export default function ResearchPage() {
   const [documents, setDocuments] = useState<string[]>([]);
 
   useEffect(() => {
-    api.documents().then(d => setDocuments(d.documents)).catch(() => {});
+    api.documents().then(d => setDocuments(d.documents ?? [])).catch(() => {});
   }, []);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {

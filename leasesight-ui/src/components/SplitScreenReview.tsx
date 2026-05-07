@@ -34,7 +34,7 @@ export function SplitScreenReview({ batchId }: { batchId: string }) {
   // PDF Viewer State
   const [selectedDoc, setSelectedDoc] = useState<string | null>(null);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
-  const [targetPage, setTargetPage] = useState<number>(1);
+  const [targetPage, setTargetPage] = useState<number | null>(1);
   const [editingId, setEditingId] = useState<number | null>(null);
 
   useEffect(() => {
@@ -74,7 +74,7 @@ export function SplitScreenReview({ batchId }: { batchId: string }) {
       const res = await api.locate(item.file_name, item.value.slice(0, 50));
       if (res.found && res.annotation) {
         setAnnotations([res.annotation]);
-        setTargetPage(res.page);
+        setTargetPage(res.page ?? 1);
       }
     } catch (e) {
       console.error('Locate failed:', e);
