@@ -211,6 +211,10 @@ async def finalize_migration(task_id: str):
         headers={"Content-Disposition": f"attachment; filename=Migration_Export_{task_id}.xlsx"}
     )
 
+from scripts.full_audit import run_full_audit
+from scripts.query_engine import ask_document
+from scripts.visual_anchor import find_coordinates
+
 # ---------------------------------------------------------------------------
 # SERVICE 2: PEER-REVIEW ASSISTANT
 # ---------------------------------------------------------------------------
@@ -225,13 +229,178 @@ async def run_research_audit(
     return scorecard
 
 # ---------------------------------------------------------------------------
+# SERVICE 3: INTERACTIVE LEASE AUDITOR
+# ---------------------------------------------------------------------------
+
+@app.post("/api/audit")
+async def start_audit(request: dict, clients: dict = Depends(get_clients)):
+    file_name = request.get("file_name")
+    if not file_name:
+        raise HTTPException(status_code=400, detail="file_name is required")
+    
+    report = run_full_audit(file_name, openai_client=clients['openai'], pinecone_index=clients['pinecone'])
+    if not report:
+        raise HTTPException(status_code=500, detail="Audit pipeline failed")
+    
+    # Add visual grounding
+    annotations = []
+    for finding in report.get("findings", []):
+        quote = finding.get("evidence_quote")
+        if quote and quote != "Not Found":
+            coords = find_coordinates(file_name, quote)
+            if coords:
+                annotations.append({
+                    "page": int(coords['page']),
+                    "x": coords['bounding_box'][0]['x'],
+                    "y": coords['bounding_box'][0]['y'],
+                    "width": coords['bounding_box'][2]['x'] - coords['bounding_box'][0]['x'],
+                    "height": coords['bounding_box'][2]['y'] - coords['bounding_box'][0]['y'],
+                    "color": "#3b82f6"
+                })
+    
+    report["annotations"] = annotations
+    return report
+
+@app.post("/api/chat")
+async def chat(request: dict, clients: dict = Depends(get_clients)):
+    query = request.get("query")
+    file_name = request.get("file_name")
+    if not query or not file_name:
+        raise HTTPException(status_code=400, detail="query and file_name required")
+    
+    result = ask_document(query, file_name, openai_client=clients['openai'], pinecone_index=clients['pinecone'])
+    
+    # Add visual grounding to chat response
+    if result.get("source_text"):
+        coords = find_coordinates(file_name, result["source_text"])
+        if coords:
+            result["annotation"] = {
+                "page": int(coords['page']),
+                "x": coords['bounding_box'][0]['x'],
+                "y": coords['bounding_box'][0]['y'],
+                "width": coords['bounding_box'][2]['x'] - coords['bounding_box'][0]['x'],
+                "height": coords['bounding_box'][2]['y'] - coords['bounding_box'][0]['y'],
+                "color": "#10b981"
+            }
+    return result
+
+@app.post("/api/locate")
+async def locate(request: dict):
+    file_name = request.get("file_name")
+    snippet = request.get("snippet")
+    if not file_name or not snippet:
+        raise HTTPException(status_code=400, detail="file_name and snippet required")
+    
+    coords = find_coordinates(file_name, snippet)
+    if not coords:
+        return {"found": False, "page": None, "annotation": None}
+    
+    return {
+        "found": True,
+        "page": int(coords['page']),
+        "annotation": {
+            "page": int(coords['page']),
+            "x": coords['bounding_box'][0]['x'],
+            "y": coords['bounding_box'][0]['y'],
+            "width": coords['bounding_box'][2]['x'] - coords['bounding_box'][0]['x'],
+            "height": coords['bounding_box'][2]['y'] - coords['bounding_box'][0]['y'],
+            "color": "#f59e0b"
+        }
+    }
+
+@app.post("/api/commit")
+async def commit(request: dict):
+    # Simplified commit for demo
+    file_name = request.get("file_name")
+    return {"success": True, "message": f"Document {file_name} committed to Knowledge Base.", "moved": True, "vectors_updated": 15}
+
+@app.post("/api/analytics")
+async def analytics(request: dict):
+    # Mock analytics for demo
+    return {
+        "archive_coords": [[0.1, 0.2], [0.5, 0.8], [0.3, 0.4]],
+        "new_coords": [0.4, 0.5],
+        "names": ["Archive Doc A", "Archive Doc B", "Archive Doc C", "Current Doc"],
+        "sufficient": True
+    }
+
+@app.get("/api/index-status/{filename}")
+async def check_index(filename: str):
+    return {"status": "indexed", "was_missing": False}
+
+@app.post("/api/export/{filename}")
+async def export_audit(filename: str, report: dict):
+    # Placeholder for PDF export
+    return Response(content=b"PDF Export Placeholder", media_type="application/pdf")
+
+# ---------------------------------------------------------------------------
 # CORE ENDPOINTS
 # ---------------------------------------------------------------------------
+
+@app.patch("/api/migrate/update/{result_id}")
+async def update_migration_result(result_id: int, data: dict):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    updates = []
+    params = []
+    
+    if "value" in data:
+        updates.append("value = ?")
+        params.append(data["value"])
+    if "selected" in data:
+        updates.append("status = ?")
+        params.append("APPROVED" if data["selected"] else "PENDING")
+    if "status" in data:
+        updates.append("status = ?")
+        params.append(data["status"])
+        
+    if not updates:
+        conn.close()
+        return {"status": "no-op"}
+        
+    params.append(result_id)
+    c.execute(f"UPDATE migration_results SET {', '.join(updates)} WHERE id = ?", params)
+    conn.commit()
+    conn.close()
+    return {"status": "success"}
 
 @app.get("/api/documents")
 async def list_documents():
     pdfs = sorted([f for f in os.listdir(RAW_PDF_DIR) if f.lower().endswith('.pdf')])
     return {"documents": pdfs, "count": len(pdfs)}
+
+@app.get("/api/health")
+async def health():
+    return {"status": "healthy", "version": "4.0", "timestamp": datetime.now().isoformat()}
+
+@app.get("/api/migrate/status/{batch_id}")
+async def get_migration_status(batch_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, total_files, processed_files, status FROM migration_batches WHERE id = ?", (batch_id,))
+    batch = c.fetchone()
+    
+    if not batch:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Batch not found")
+        
+    c.execute("SELECT id, file_name, category, value, confidence, status FROM migration_results WHERE batch_id = ?", (batch_id,))
+    rows = c.fetchall()
+    conn.close()
+    
+    results = [
+        {"id": r[0], "file_name": r[1], "category": r[2], "value": r[3], "confidence": r[4], "selected": r[5] == 'APPROVED'}
+        for r in rows
+    ]
+    
+    return {
+        "batch_id": batch[0],
+        "total": batch[1],
+        "processed": batch[2],
+        "status": batch[3],
+        "results": results
+    }
 
 @app.get("/pdfs/{filename:path}")
 async def serve_pdf(filename: str):

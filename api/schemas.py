@@ -32,19 +32,48 @@ class Coordinate(BaseModel):
     width: float
     height: float
 
-class Finding(BaseModel):
+class ResearchFinding(BaseModel):
     label: str
     value: str
     explanation: str
     coordinates: Optional[Coordinate] = None
 
 class ResearchScorecard(BaseModel):
-    originality: Finding
-    technical_rigor: Finding
-    citation_validity: Finding
-    narrative_clarity: Finding
+    originality: ResearchFinding
+    technical_rigor: ResearchFinding
+    citation_validity: ResearchFinding
+    narrative_clarity: ResearchFinding
     overall_score: int
     missing_citations: List[str]
+
+class Finding(BaseModel):
+    label: str
+    value: str
+    evidence_quote: str
+
+class Obligation(BaseModel):
+    label: str
+    date: str
+    description: str
+
+class Annotation(BaseModel):
+    page: int = Field(alias="page")
+    x: float
+    y: float
+    width: float
+    height: float
+    color: str = "#3b82f6"
+
+class AuditResult(BaseModel):
+    findings: List[Finding]
+    obligations: Optional[List[Obligation]] = []
+    summary_paragraph: str
+    risk_score: int
+    warnings: List[str]
+    annotations: List[Annotation] = []
+
+class AuditRequest(BaseModel):
+    file_name: str
 
 class AuthKeys(BaseModel):
     openai_key: Optional[str] = None

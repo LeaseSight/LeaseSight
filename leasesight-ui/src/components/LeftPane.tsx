@@ -141,7 +141,7 @@ export function LeftPane({
           >
             <option value="">Select a document...</option>
             {documents.map(d => (
-              <option key={d} value={d}>{d.length > 50 ? d.slice(0, 50) + '...' : d}</option>
+              <option key={d} value={d}>{d}</option>
             ))}
           </select>
           <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none"

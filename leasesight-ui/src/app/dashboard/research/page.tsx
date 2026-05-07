@@ -65,18 +65,44 @@ export default function ResearchPage() {
           </div>
 
           {!scorecard && !loading && (
-            <div className="group relative rounded-[2.5rem] border-2 border-dashed border-slate-200 bg-white p-20 text-center transition-all hover:border-emerald-300 hover:bg-emerald-50/10">
-              <input 
-                type="file" 
-                onChange={handleUpload}
-                className="absolute inset-0 opacity-0 cursor-pointer"
-                accept=".pdf"
-              />
-              <div className="w-20 h-20 rounded-3xl bg-emerald-50 flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition-transform">
-                <Upload className="w-8 h-8 text-emerald-600" />
+            <div className="space-y-8">
+              {/* Document Selector for existing files */}
+              <div className="bg-white rounded-3xl border border-slate-200 p-8 shadow-sm">
+                <h3 className="text-sm font-bold text-slate-900 mb-4 uppercase tracking-widest">Audit Existing Draft</h3>
+                <div className="flex gap-4">
+                  <select 
+                    className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none bg-slate-50 focus:ring-2 focus:ring-emerald-500/20"
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        setLoading(true);
+                        api.auditResearch(e.target.value)
+                          .then(setScorecard)
+                          .catch(err => setError(err.message))
+                          .finally(() => setLoading(false));
+                      }
+                    }}
+                  >
+                    <option value="">Select a paper from archive...</option>
+                    {documents.map(d => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
-              <h3 className="text-xl font-bold text-slate-900 mb-2">Upload Research Draft</h3>
-              <p className="text-sm text-slate-400 font-medium">Click or drag and drop your PDF paper here</p>
+
+              <div className="group relative rounded-[2.5rem] border-2 border-dashed border-slate-200 bg-white p-20 text-center transition-all hover:border-emerald-300 hover:bg-emerald-50/10">
+                <input 
+                  type="file" 
+                  onChange={handleUpload}
+                  className="absolute inset-0 opacity-0 cursor-pointer"
+                  accept=".pdf"
+                />
+                <div className="w-20 h-20 rounded-3xl bg-emerald-50 flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition-transform">
+                  <Upload className="w-8 h-8 text-emerald-600" />
+                </div>
+                <h3 className="text-xl font-bold text-slate-900 mb-2">Upload New Research Draft</h3>
+                <p className="text-sm text-slate-400 font-medium">Click or drag and drop your PDF paper here</p>
+              </div>
             </div>
           )}
 
@@ -120,25 +146,25 @@ export default function ResearchPage() {
                 
                 <ScoreItem 
                   title="Originality" 
-                  content={scorecard.originality} 
+                  content={scorecard.originality?.explanation || scorecard.originality?.value} 
                   icon={BookOpen} 
                   color="purple" 
                 />
                 <ScoreItem 
-                  title="Technical Correctness" 
-                  content={scorecard.technical_correctness} 
+                  title="Technical Rigor" 
+                  content={scorecard.technical_rigor?.explanation || scorecard.technical_rigor?.value} 
                   icon={Microscope} 
                   color="blue" 
                 />
                 <ScoreItem 
                   title="Narrative Clarity" 
-                  content={scorecard.narrative_clarity} 
+                  content={scorecard.narrative_clarity?.explanation || scorecard.narrative_clarity?.value} 
                   icon={Sparkles} 
                   color="emerald" 
                 />
                 <ScoreItem 
                   title="Missing Citations" 
-                  content={scorecard.missing_citations} 
+                  content={Array.isArray(scorecard.missing_citations) ? scorecard.missing_citations.join(', ') : scorecard.missing_citations} 
                   icon={FileText} 
                   color="amber" 
                 />
@@ -182,9 +208,9 @@ function ScoreItem({ title, content, icon: Icon, color }: any) {
         <Icon className="w-6 h-6" />
       </div>
       <h4 className="text-lg font-bold text-slate-900 mb-4">{title}</h4>
-      <p className="text-sm text-slate-500 leading-relaxed font-medium">
+      <div className="text-sm text-slate-500 leading-relaxed font-medium">
         {content}
-      </p>
+      </div>
     </div>
   );
 }
