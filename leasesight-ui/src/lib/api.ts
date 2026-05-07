@@ -10,6 +10,18 @@ import { AuditResult, ChatResponse, LocateResponse, GraphData, HealthStatus, Com
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 // ---------------------------------------------------------------------------
+// Global Auth Context (Set by AuthGate)
+// ---------------------------------------------------------------------------
+
+let globalUserId: string | null = null;
+let globalUserTier: 'BYOK' | 'Managed' | null = 'Managed'; // Default to Managed for developer use
+
+export function setApiAuthContext(userId: string | null, tier: 'BYOK' | 'Managed' | null) {
+  globalUserId = userId;
+  globalUserTier = tier || 'Managed';
+}
+
+// ---------------------------------------------------------------------------
 // Key Storage Helpers
 // ---------------------------------------------------------------------------
 
@@ -59,12 +71,22 @@ export class ApiAuthError extends Error {
 // ---------------------------------------------------------------------------
 
 function buildKeyHeaders(): Record<string, string> {
-  const keys = getStoredKeys();
   const headers: Record<string, string> = {};
-  if (keys.openai)        headers['X-OpenAI-Key']      = keys.openai;
-  if (keys.pinecone)      headers['X-Pinecone-Key']    = keys.pinecone;
-  if (keys.azureKey)      headers['X-Azure-Key']       = keys.azureKey;
-  if (keys.azureEndpoint) headers['X-Azure-Endpoint']  = keys.azureEndpoint;
+  
+  if (globalUserId) {
+    headers['X-User-Id'] = globalUserId;
+  }
+
+  // Brain Switch Logic
+  if (globalUserTier === 'BYOK') {
+    const keys = getStoredKeys();
+    if (keys.openai)        headers['X-OpenAI-Key']      = keys.openai;
+    if (keys.pinecone)      headers['X-Pinecone-Key']    = keys.pinecone;
+    if (keys.azureKey)      headers['X-Azure-Key']       = keys.azureKey;
+    if (keys.azureEndpoint) headers['X-Azure-Endpoint']  = keys.azureEndpoint;
+  }
+  // If Managed, we send NO keys, telling the backend to use its .env
+  
   return headers;
 }
 
@@ -119,6 +141,12 @@ export const api = {
     fetchJSON<ChatResponse>('/api/chat', {
       method: 'POST',
       body: JSON.stringify({ query, file_name }),
+    }),
+
+  auditResearch: (file_name: string) =>
+    fetchJSON<any>('/api/audit/research', {
+      method: 'POST',
+      body: JSON.stringify({ file_name }),
     }),
 
   locate: (file_name: string, snippet: string) =>
@@ -181,4 +209,35 @@ export const api = {
     }),
 
   auditLogUrl: () => `${API_BASE}/api/audit-log`,
+
+  // Migration Pro methods
+  startMigration: async (files: File[]) => {
+    const keyHeaders = buildKeyHeaders();
+    const formData = new FormData();
+    files.forEach(f => formData.append('files', f));
+    const res = await fetch(`${API_BASE}/api/migrate/upload`, {
+      method: 'POST',
+      headers: keyHeaders,
+      body: formData,
+    });
+    if (!res.ok) throw new Error(`Migration upload error: ${res.status}`);
+    return res.json();
+  },
+
+  getMigrationStatus: (batchId: string) => 
+    fetchJSON<{ batch_id: string; total: number; processed: number; status: string; results: any[] }>(`/api/migrate/status/${batchId}`),
+
+  migrationExportUrl: (batchId: string) => `${API_BASE}/api/migrate/export/${batchId}`,
+
+  updateMigrationResult: (resultId: number, data: any) =>
+    fetchJSON(`/api/migrate/update/${resultId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  finalizeMigration: async (batchId: string) => {
+    const res = await fetch(`${API_BASE}/api/migrate/finalize/${batchId}`, { method: 'POST' });
+    if (!res.ok) throw new Error('Finalize failed');
+    return res.blob();
+  },
 };

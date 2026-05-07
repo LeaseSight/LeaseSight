@@ -1,43 +1,56 @@
-# api/main.py — LeaseSight FastAPI Backend v3.0
-# Keys accepted via request headers; falls back to .env for local development.
-
-import os, sys, json, sqlite3, hashlib
+import os, sys, json, sqlite3, uuid, hashlib
 from datetime import datetime
-import numpy as np
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
+import pandas as pd
+import io
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
-
-BASE_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(BASE_DIR))
-sys.path.insert(0, str(BASE_DIR / "scripts"))
-load_dotenv(BASE_DIR / ".env")
-
-from scripts.full_audit import run_full_audit
-from scripts.visual_anchor import find_coordinates
-from scripts.query_engine import ask_document
-from scripts.database_manager import commit_to_knowledge_base
-from scripts.processor import process_new_pdf
-
-from openai import OpenAI, AuthenticationError as OAIAuthError
+from openai import OpenAI
 from pinecone import Pinecone
 from azure.ai.formrecognizer import DocumentAnalysisClient
 from azure.core.credentials import AzureKeyCredential
 
-# ---------------------------------------------------------------------------
-# DATABASE INITIALIZATION (SaaS History Tracking)
-# ---------------------------------------------------------------------------
+# Local Imports
+BASE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BASE_DIR))
+from api.schemas import EntityStatus, MigrationEntity, MigrationTask, ResearchAuditRequest, ResearchScorecard, AuthKeys
+from api.processor import UniversalProcessor, ResearchAuditor
+from scripts.processor import process_new_pdf
+
+load_dotenv(BASE_DIR / ".env")
 DB_PATH = BASE_DIR / "leasesight.db"
+RAW_PDF_DIR = BASE_DIR / "data" / "raw_pdfs"
+RAW_PDF_DIR.mkdir(parents=True, exist_ok=True)
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    # Migration Batches
+    c.execute('''CREATE TABLE IF NOT EXISTS migration_batches
+                 (id TEXT PRIMARY KEY,
+                  timestamp TEXT,
+                  user_hash TEXT,
+                  total_files INTEGER,
+                  processed_files INTEGER,
+                  status TEXT)''')
+    
+    # Migration Results with Status (PENDING, APPROVED, DISCARDED)
+    c.execute('''CREATE TABLE IF NOT EXISTS migration_results
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  batch_id TEXT,
+                  file_name TEXT,
+                  category TEXT,
+                  value TEXT,
+                  confidence REAL,
+                  status TEXT DEFAULT 'PENDING',
+                  raw_json TEXT)''')
+                  
+    # Audit Logs for Interactive Auditor
     c.execute('''CREATE TABLE IF NOT EXISTS audit_logs
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   timestamp TEXT,
@@ -52,449 +65,181 @@ def init_db():
 
 init_db()
 
-# ---------------------------------------------------------------------------
-app = FastAPI(title="LeaseSight API", version="3.0")
+app = FastAPI(title="LeaseSight Production API", version="4.0")
 
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
 )
 
+DB_PATH = BASE_DIR / "leasesight.db"
 RAW_PDF_DIR = BASE_DIR / "data" / "raw_pdfs"
-JSON_MAP_DIR = BASE_DIR / "data" / "json_maps"
 RAW_PDF_DIR.mkdir(parents=True, exist_ok=True)
-JSON_MAP_DIR.mkdir(parents=True, exist_ok=True)
 
-DPI = 1.0  # Emit raw Azure inches for frontend formula
+# ---------------------------------------------------------------------------
+# DEPENDENCY: HYBRID KEY SYSTEM (BYOK + Managed)
+# ---------------------------------------------------------------------------
 
-
-# ===========================================================================
-# CLIENT DEPENDENCY — reads from headers, falls back to .env
-# ===========================================================================
-
-class ClientBundle:
-    def __init__(self, openai_client, pinecone_index, azure_client, user_hash):
-        self.openai = openai_client
-        self.pinecone = pinecone_index
-        self.azure = azure_client
-        self.user_hash = user_hash
-
-
-def get_clients(request: Request) -> ClientBundle:
+async def get_api_keys(request: Request) -> AuthKeys:
     """
-    Build per-request API clients from headers.
-    Falls back to .env values when a header is absent (local dev support).
-    Raises HTTP 401 with a clear message if a key is present but invalid.
+    Dependency to resolve API keys.
+    Priority: Request Headers (X-OpenAI-Key, etc.) -> .env (Managed)
     """
-    openai_key = request.headers.get("X-OpenAI-Key") or os.getenv("OPENAI_API_KEY", "")
-    pinecone_key = request.headers.get("X-Pinecone-Key") or os.getenv("PINECONE_API_KEY", "")
-    azure_key = request.headers.get("X-Azure-Key") or os.getenv("AZURE_KEY", "")
-    azure_endpoint = request.headers.get("X-Azure-Endpoint") or os.getenv("AZURE_ENDPOINT", "")
-
+    openai_key = request.headers.get("X-OpenAI-Key") or os.getenv("MANAGED_OPENAI_KEY") or os.getenv("OPENAI_API_KEY")
+    pinecone_key = request.headers.get("X-Pinecone-Key") or os.getenv("MANAGED_PINECONE_KEY") or os.getenv("PINECONE_API_KEY")
+    azure_key = request.headers.get("X-Azure-Key") or os.getenv("MANAGED_AZURE_KEY") or os.getenv("AZURE_KEY")
+    azure_endpoint = request.headers.get("X-Azure-Endpoint") or os.getenv("MANAGED_AZURE_ENDPOINT") or os.getenv("AZURE_ENDPOINT")
+    
     if not openai_key:
-        raise HTTPException(status_code=401, detail="OpenAI API key is missing. Please configure it in Settings.")
-    if not pinecone_key:
-        raise HTTPException(status_code=401, detail="Pinecone API key is missing. Please configure it in Settings.")
+        raise HTTPException(status_code=401, detail="No OpenAI API key provided or configured.")
+        
+    return AuthKeys(
+        openai_key=openai_key,
+        pinecone_key=pinecone_key,
+        azure_key=azure_key,
+        azure_endpoint=azure_endpoint
+    )
 
-    try:
-        oai = OpenAI(api_key=openai_key)
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid OpenAI API key. Please check your Settings.")
-
-    try:
-        pc = Pinecone(api_key=pinecone_key)
-        pc_index = pc.Index("leasesight-index")
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid Pinecone API key. Please check your Settings.")
-
+def get_clients(keys: AuthKeys = Depends(get_api_keys)):
+    openai_client = OpenAI(api_key=keys.openai_key)
+    pc = Pinecone(api_key=keys.pinecone_key)
+    pinecone_index = pc.Index("leasesight-index")
+    
     azure_client = None
-    if azure_key and azure_endpoint:
-        try:
-            azure_client = DocumentAnalysisClient(
-                endpoint=azure_endpoint,
-                credential=AzureKeyCredential(azure_key)
-            )
-        except Exception:
-            raise HTTPException(status_code=401, detail="Invalid Azure credentials. Please check your Settings.")
+    if keys.azure_key and keys.azure_endpoint:
+        azure_client = DocumentAnalysisClient(
+            endpoint=keys.azure_endpoint,
+            credential=AzureKeyCredential(keys.azure_key)
+        )
+        
+    return {
+        "openai": openai_client,
+        "pinecone": pinecone_index,
+        "azure": azure_client
+    }
 
-    # Calculate a unique hash for this user to keep their history private/separate
-    user_hash = hashlib.sha256(openai_key.encode()).hexdigest()[:12]
+# ---------------------------------------------------------------------------
+# AUTH: CLERK JWT VERIFICATION (Placeholder/Simulated for local dev)
+# ---------------------------------------------------------------------------
 
-    return ClientBundle(oai, pc_index, azure_client, user_hash)
+async def verify_auth(request: Request):
+    """
+    Verifies the Clerk JWT token from the Authorization header.
+    In production, use clerk_sdk.verify_token(token).
+    """
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        # Fallback for local testing if needed, but in prod this should fail
+        return "anonymous"
+    
+    # Token logic goes here...
+    return "user_verified"
 
+# ---------------------------------------------------------------------------
+# SERVICE 1: UNIVERSAL LEGACY MIGRATION
+# ---------------------------------------------------------------------------
 
-# ===========================================================================
-# REQUEST MODELS
-# ===========================================================================
+@app.post("/api/migrate/upload")
+async def start_migration(
+    background_tasks: BackgroundTasks, 
+    files: List[UploadFile] = File(...), 
+    clients: dict = Depends(get_clients),
+    user_id: str = Depends(verify_auth)
+):
+    task_id = str(uuid.uuid4())[:8]
+    file_names = []
+    
+    for file in files:
+        target_path = RAW_PDF_DIR / file.filename
+        content = await file.read()
+        with open(target_path, "wb") as f:
+            f.write(content)
+        file_names.append(file.filename)
+    
+    # Initialize batch in DB
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO migration_batches (id, timestamp, user_hash, total_files, processed_files, status) VALUES (?,?,?,?,?,?)",
+              (task_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id, len(file_names), 0, 'PENDING'))
+    conn.commit()
+    conn.close()
+    
+    # Trigger background task
+    processor = UniversalProcessor(clients['openai'], clients['pinecone'], clients['azure'])
+    background_tasks.add_task(processor.process_batch, task_id, file_names)
+    
+    return {"task_id": task_id, "status": "QUEUED", "file_count": len(file_names)}
 
-class AuditRequest(BaseModel):
-    file_name: str
+@app.get("/api/migrate/review/{task_id}")
+async def get_migration_review(task_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, file_name, category, value, confidence, status FROM migration_results WHERE batch_id = ?", (task_id,))
+    rows = c.fetchall()
+    conn.close()
+    
+    results = [
+        MigrationEntity(id=r[0], file_name=r[1], category=r[2], value=r[3], confidence=r[4], status=r[5])
+        for r in rows
+    ]
+    return results
 
-class ChatRequest(BaseModel):
-    query: str
-    file_name: str
+@app.post("/api/migrate/finalize")
+async def finalize_migration(task_id: str):
+    """
+    Exports only 'APPROVED' items to a downloadable Excel file.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("SELECT file_name, category, value, confidence FROM migration_results WHERE batch_id = ? AND status = 'APPROVED'", conn, params=(task_id,))
+    conn.close()
+    
+    if df.empty:
+        raise HTTPException(status_code=400, detail="No approved items found to export.")
+    
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='MigrationResults')
+    output.seek(0)
+    
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=Migration_Export_{task_id}.xlsx"}
+    )
 
-class LocateRequest(BaseModel):
-    file_name: str
-    snippet: str
+# ---------------------------------------------------------------------------
+# SERVICE 2: PEER-REVIEW ASSISTANT
+# ---------------------------------------------------------------------------
 
-class CommitRequest(BaseModel):
-    file_name: str
-    vector_ids: Optional[list[str]] = None
+@app.post("/api/audit/research")
+async def run_research_audit(
+    request: ResearchAuditRequest, 
+    clients: dict = Depends(get_clients)
+):
+    auditor = ResearchAuditor(clients['openai'], clients['pinecone'])
+    scorecard = await auditor.audit_paper(request.file_name)
+    return scorecard
 
-class GraphRequest(BaseModel):
-    file_name: str
-
-class DiffRequest(BaseModel):
-    baseline_file: str
-    target_file: str
-
-class CalendarRequest(BaseModel):
-    obligations: list[dict]
-
-
-# ===========================================================================
-# ENDPOINTS
-# ===========================================================================
-
-@app.get("/api/health")
-async def health_check(clients: ClientBundle = Depends(get_clients)):
-    status = {"status": "ok", "pinecone": "unknown", "openai": "unknown"}
-    try:
-        clients.pinecone.describe_index_stats()
-        status["pinecone"] = "connected"
-    except Exception:
-        status["pinecone"] = "error"
-    try:
-        clients.openai.models.list()
-        status["openai"] = "connected"
-    except Exception:
-        status["openai"] = "error"
-    return status
-
+# ---------------------------------------------------------------------------
+# CORE ENDPOINTS
+# ---------------------------------------------------------------------------
 
 @app.get("/api/documents")
 async def list_documents():
     pdfs = sorted([f for f in os.listdir(RAW_PDF_DIR) if f.lower().endswith('.pdf')])
     return {"documents": pdfs, "count": len(pdfs)}
 
-
 @app.get("/pdfs/{filename:path}")
 async def serve_pdf(filename: str):
-    """
-    Manually serve PDFs with explicit CORS headers to bypass StaticFiles middleware issues.
-    This ensures the PDF viewer in the frontend can fetch the binary document.
-    """
     target_path = RAW_PDF_DIR / filename
     if not target_path.exists():
         raise HTTPException(status_code=404, detail="PDF not found")
-    
-    return FileResponse(
-        str(target_path),
-        media_type="application/pdf"
-    )
+    return FileResponse(str(target_path), media_type="application/pdf")
 
-# ... (end of serve_pdf)
-
-
-@app.get("/api/index-status/{filename:path}")
-async def check_index_status(filename: str, clients: ClientBundle = Depends(get_clients)):
-    json_path = JSON_MAP_DIR / f"{filename}.json"
-    if not json_path.exists():
-        target_path = RAW_PDF_DIR / filename
-        if not target_path.exists():
-            raise HTTPException(status_code=404, detail="PDF not found")
-        process_new_pdf(str(target_path), filename,
-                        openai_client=clients.openai,
-                        pinecone_index=clients.pinecone,
-                        azure_client=clients.azure)
-        return {"status": "indexed", "was_missing": True}
-    return {"status": "indexed", "was_missing": False}
-
-
-@app.post("/api/upload")
-async def upload_document(file: UploadFile = File(...), clients: ClientBundle = Depends(get_clients)):
-    target_path = RAW_PDF_DIR / file.filename
-    try:
-        content = await file.read()
-        with open(target_path, "wb") as f:
-            f.write(content)
-        process_new_pdf(str(target_path), file.filename,
-                        openai_client=clients.openai,
-                        pinecone_index=clients.pinecone,
-                        azure_client=clients.azure)
-        return {"file_name": file.filename, "status": "indexed"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/audit")
-async def run_audit(request: AuditRequest, clients: ClientBundle = Depends(get_clients)):
-    try:
-        results = run_full_audit(request.file_name,
-                                 openai_client=clients.openai,
-                                 pinecone_index=clients.pinecone)
-        if not results:
-            return {"findings": [], "summary_paragraph": "No data found.", "risk_score": 1, "warnings": []}
-
-        annotations = []
-        for finding in results.get('findings', []):
-            evidence = finding.get('evidence_quote', '')
-            if evidence and str(evidence).lower() != "not found":
-                coord_data = find_coordinates(request.file_name, str(evidence))
-                if coord_data:
-                    bbox = coord_data['bounding_box']
-                    xs = [p['x'] * DPI for p in bbox]
-                    ys = [p['y'] * DPI for p in bbox]
-                    annotations.append({
-                        "page": int(coord_data['page']),
-                        "x": min(xs), "y": min(ys),
-                        "width": max(xs) - min(xs),
-                        "height": max(ys) - min(ys),
-                        "color": "red",
-                    })
-        results["annotations"] = annotations
-
-        # Log to SQLite (SaaS History)
-        try:
-            findings_dict = {f.get('label'): f.get('value') for f in results.get('findings', [])}
-            log_data = (
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                clients.user_hash,
-                request.file_name,
-                str(findings_dict.get('Parties', findings_dict.get('Tenant/Landlord', 'Unknown'))),
-                str(findings_dict.get('Monthly Rent', 'Unknown')),
-                str(results.get('risk_score', 'N/A')),
-                ', '.join([f"{k}: {v}" for k, v in findings_dict.items()][:5])
-            )
-            
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("INSERT INTO audit_logs (timestamp, user_hash, file_name, lessor_lessee, rent, risk_score, key_terms) VALUES (?,?,?,?,?,?,?)", log_data)
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print(f"SQL Logging Error: {e}")
-
-        return results
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/chat")
-async def chat_with_document(request: ChatRequest, clients: ClientBundle = Depends(get_clients)):
-    try:
-        result = ask_document(request.query, request.file_name,
-                              openai_client=clients.openai,
-                              pinecone_index=clients.pinecone)
-        annotation = None
-        if result.get('source_text'):
-            coord_data = find_coordinates(request.file_name, result['source_text'][:80])
-            if coord_data:
-                bbox = coord_data['bounding_box']
-                xs = [p['x'] * DPI for p in bbox]
-                ys = [p['y'] * DPI for p in bbox]
-                annotation = {
-                    "page": int(coord_data['page']),
-                    "x": min(xs), "y": min(ys),
-                    "width": max(xs) - min(xs),
-                    "height": max(ys) - min(ys),
-                    "color": "orange",
-                }
-        result["annotation"] = annotation
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/locate")
-async def locate_snippet(request: LocateRequest):
-    coord_data = find_coordinates(request.file_name, request.snippet)
-    if not coord_data:
-        return {"found": False, "page": None, "annotation": None}
-    bbox = coord_data['bounding_box']
-    xs = [p['x'] * DPI for p in bbox]
-    ys = [p['y'] * DPI for p in bbox]
-    return {
-        "found": True,
-        "page": int(coord_data['page']),
-        "annotation": {
-            "page": int(coord_data['page']),
-            "x": min(xs), "y": min(ys),
-            "width": max(xs) - min(xs),
-            "height": max(ys) - min(ys),
-            "color": "red",
-        }
-    }
-
-
-@app.post("/api/commit")
-async def commit_document(request: CommitRequest):
-    try:
-        result = commit_to_knowledge_base(file_name=request.file_name, vector_ids=request.vector_ids)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/diff")
-async def get_diff(request: DiffRequest):
-    import difflib
-    baseline_name = request.baseline_file if request.baseline_file.endswith('.json') else f"{request.baseline_file}.json"
-    target_name = request.target_file if request.target_file.endswith('.json') else f"{request.target_file}.json"
-    baseline_path, target_path = JSON_MAP_DIR / baseline_name, JSON_MAP_DIR / target_name
-    if not baseline_path.exists() or not target_path.exists():
-        return {"additions": [], "deletions": []}
-    with open(baseline_path) as f: base_data = json.load(f)
-    with open(target_path) as f: target_data = json.load(f)
-
-    def extract_lines(data):
-        lines = []
-        for p in data.get('pages', []):
-            pn = p.get('page_number', 1)
-            for l in p.get('lines', []):
-                lines.append({"text": l.get('content', ''), "bbox": l.get('bounding_box', []), "page": pn})
-        return lines
-
-    base_lines, target_lines = extract_lines(base_data), extract_lines(target_data)
-    sm = difflib.SequenceMatcher(None, [l['text'] for l in base_lines], [l['text'] for l in target_lines])
-    additions, deletions = [], []
-    for tag, i1, i2, j1, j2 in sm.get_opcodes():
-        if tag in ('insert', 'replace'):
-            for j in range(j1, j2):
-                l = target_lines[j]
-                if not l['bbox']: continue
-                xs = [p['x'] for p in l['bbox']]; ys = [p['y'] for p in l['bbox']]
-                additions.append({"page": l['page'], "x": min(xs), "y": min(ys), "width": max(xs)-min(xs), "height": max(ys)-min(ys), "color": "#10b981", "text": l['text']})
-        if tag in ('delete', 'replace'):
-            for i in range(i1, i2):
-                l = base_lines[i]
-                if not l['bbox']: continue
-                xs = [p['x'] for p in l['bbox']]; ys = [p['y'] for p in l['bbox']]
-                deletions.append({"page": l['page'], "x": min(xs), "y": min(ys), "width": max(xs)-min(xs), "height": max(ys)-min(ys), "color": "#ef4444", "text": l['text']})
-    return {"additions": additions, "deletions": deletions}
-
-
-@app.post("/api/analytics")
-async def get_analytics_data(request: GraphRequest, clients: ClientBundle = Depends(get_clients)):
-    try:
-        from sklearn.metrics.pairwise import cosine_similarity
-        from sklearn.decomposition import PCA
-        emb_res = clients.openai.embeddings.create(
-            input=["Parties involved, rent details, address, and legal obligations"],
-            model="text-embedding-3-small"
-        )
-        current_vec = emb_res.data[0].embedding
-        internal_results = clients.pinecone.query(vector=current_vec, top_k=50,
-            filter={"file_name": {"$eq": request.file_name}}, include_values=True, include_metadata=False)
-        chunk_vectors = [m['values'] for m in internal_results.get('matches', []) if 'values' in m]
-        similarities = cosine_similarity([current_vec], chunk_vectors)[0].tolist() if chunk_vectors else []
-        results = clients.pinecone.query(vector=current_vec, top_k=100, include_values=True, include_metadata=True)
-        vectors, names, seen = [], [], set()
-        for match in results.get('matches', []):
-            fn = match.get('metadata', {}).get('file_name', 'Unknown')
-            if fn == request.file_name or fn in seen: continue
-            seen.add(fn); vectors.append(match['values']); names.append(fn)
-        if len(vectors) < 3:
-            return {"archive_coords": [], "new_coords": [], "names": [], "sufficient": False,
-                    "internal_similarities": similarities, "benchmark_score": 0}
-        all_vectors = np.array(vectors + [current_vec])
-        coords_3d = PCA(n_components=3).fit_transform(all_vectors)
-        top_sims = sorted(cosine_similarity([current_vec], vectors)[0], reverse=True)[:10]
-        return {"archive_coords": coords_3d[:-1].tolist(), "new_coords": coords_3d[-1].tolist(),
-                "names": names, "sufficient": True, "internal_similarities": similarities,
-                "benchmark_score": int(np.mean(top_sims) * 100)}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/calendar")
-async def generate_calendar(request: CalendarRequest):
-    from datetime import datetime, timedelta
-    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//LeaseSight//Obligations//EN"]
-    for obs in request.obligations:
-        dt = datetime.now() + timedelta(days=30)
-        dt_str = dt.strftime("%Y%m%dT%H%M%S")
-        lines.extend(["BEGIN:VEVENT", f"DTSTART:{dt_str}", f"DTEND:{dt_str}",
-                       f"SUMMARY:{obs.get('label', 'Obligation')}",
-                       f"DESCRIPTION:{obs.get('description', '')}\\nDate mentioned: {obs.get('date', '')}",
-                       "END:VEVENT"])
-    lines.append("END:VCALENDAR")
-    return Response(content="\\r\\n".join(lines), media_type="text/calendar")
-
-
-@app.get("/api/audit-log")
-async def download_audit_log(clients: ClientBundle = Depends(get_clients)):
-    """
-    Returns a CSV of the user's history from the SQLite database.
-    Filtered by user_hash to ensure privacy in a SaaS model.
-    """
-    import csv, io
-    from fastapi.responses import StreamingResponse
-    
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT timestamp, file_name, lessor_lessee, rent, risk_score, key_terms FROM audit_logs WHERE user_hash = ?", (clients.user_hash,))
-    rows = c.fetchall()
-    conn.close()
-    
-    if not rows:
-        raise HTTPException(status_code=404, detail="No audit history found for your account.")
-        
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(['Timestamp', 'File Name', 'Lessor/Lessee', 'Rent', 'Risk Score', 'Key Terms'])
-    writer.writerows(rows)
-    output.seek(0)
-    
-    return StreamingResponse(
-        io.BytesIO(output.getvalue().encode('utf-8')),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=audit_history.csv"}
-    )
-
-
-@app.post("/api/export/{file_name:path}")
-async def export_audit(file_name: str, request: Request):
-    try:
-        audit_results = await request.json()
-        from scripts.report_generator import generate_audit_pdf
-        pdf_bytes = generate_audit_pdf(audit_results, file_name)
-        return Response(content=pdf_bytes, media_type="application/pdf")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/query-analytics")
-async def get_query_analytics(request: ChatRequest, clients: ClientBundle = Depends(get_clients)):
-    try:
-        from sklearn.metrics.pairwise import cosine_similarity
-        from sklearn.decomposition import PCA
-        emb_res = clients.openai.embeddings.create(input=[request.query], model="text-embedding-3-small")
-        query_vec = emb_res.data[0].embedding
-        internal_results = clients.pinecone.query(vector=query_vec, top_k=50,
-            filter={"file_name": {"$eq": request.file_name}}, include_values=True, include_metadata=False)
-        chunk_vectors = [m['values'] for m in internal_results.get('matches', []) if 'values' in m]
-        if len(chunk_vectors) < 2:
-            return {"sufficient": False}
-        similarities = cosine_similarity([query_vec], chunk_vectors)[0].tolist()
-        coords_3d = PCA(n_components=3).fit_transform(np.array(chunk_vectors + [query_vec]))
-        return {"sufficient": True, "archive_coords": coords_3d[:-1].tolist(),
-                "new_coords": coords_3d[-1].tolist(), "similarities": similarities,
-                "names": [f"Chunk {i+1}" for i in range(len(chunk_vectors))]}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

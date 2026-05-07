@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Activity, Search, Zap, Wifi, WifiOff, Network, Settings, KeyRound } from 'lucide-react';
+import { Activity, Search, Zap, Wifi, WifiOff, Network, Settings, KeyRound, ChevronDown, Database, LayoutPanelLeft, FileStack, GraduationCap } from 'lucide-react';
 import { api, hasStoredKeys } from '@/lib/api';
 
 interface HeaderProps {
@@ -17,6 +17,7 @@ export function Header({ isAuditing, onToggleNetwork, documents, onSelectDoc }: 
   const [searchQuery, setSearchQuery]     = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [keysConfigured, setKeysConfigured]   = useState(false);
+  const [isServicesOpen, setIsServicesOpen]   = useState(false);
 
   useEffect(() => {
     setKeysConfigured(hasStoredKeys());
@@ -35,25 +36,68 @@ export function Header({ isAuditing, onToggleNetwork, documents, onSelectDoc }: 
     <header className="h-12 flex items-center justify-between px-4 border-b glass shrink-0"
             style={{ borderColor: 'var(--border-default)', zIndex: 40, position: 'relative' }}>
 
-      {/* Left: Logo + Brand */}
-      <Link href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
-        <div className="flex items-center gap-2">
-          <Zap className="w-4 h-4" style={{ color: 'var(--accent-emerald)' }} />
-          <span className="font-bold text-sm tracking-widest" style={{
-            color: 'var(--text-primary)',
-            background: 'var(--brand-gradient)',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
-            backgroundClip: 'text',
-          }}>
-            LEASESIGHT
-          </span>
+      {/* Left: Logo + Brand + Switcher */}
+      <div className="flex items-center gap-6">
+        <Link href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+          <div className="flex items-center gap-2">
+            <Zap className="w-4 h-4" style={{ color: 'var(--accent-emerald)' }} />
+            <span className="font-bold text-sm tracking-widest" style={{
+              color: 'var(--text-primary)',
+              background: 'var(--brand-gradient)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text',
+            }}>
+              LEASESIGHT
+            </span>
+          </div>
+        </Link>
+
+        {/* Service Switcher */}
+        <div className="relative">
+          <button 
+            onClick={() => setIsServicesOpen(!isServicesOpen)}
+            onBlur={() => setTimeout(() => setIsServicesOpen(false), 200)}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-black/10 bg-black/5 hover:bg-black/10 transition-all"
+          >
+            <LayoutPanelLeft className="w-3.5 h-3.5 text-purple-500" />
+            <span className="text-[11px] font-bold tracking-tight opacity-70">SERVICES</span>
+            <ChevronDown className={`w-3 h-3 opacity-30 transition-transform ${isServicesOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          {isServicesOpen && (
+            <div className="absolute top-full left-0 mt-2 w-64 rounded-xl border border-black/10 bg-white shadow-2xl z-50 p-1.5 animate-fade-in">
+              <Link href="/dashboard/audit" className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-purple-50 transition-colors group">
+                <div className="w-8 h-8 rounded-md bg-purple-100 flex items-center justify-center text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-colors">
+                  <Activity className="w-4 h-4" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold">Lease Auditor</p>
+                  <p className="text-[10px] text-gray-500">Surgical AI analysis & chat</p>
+                </div>
+              </Link>
+              <Link href="/dashboard/migrate" className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-blue-50 transition-colors group mt-1">
+                <div className="w-8 h-8 rounded-md bg-blue-100 flex items-center justify-center text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                  <Database className="w-4 h-4" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold">Migration Pro</p>
+                  <p className="text-[10px] text-gray-500">Legacy data bulk extraction</p>
+                </div>
+              </Link>
+              <Link href="/dashboard/research" className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-emerald-50 transition-colors group mt-1">
+                <div className="w-8 h-8 rounded-md bg-emerald-100 flex items-center justify-center text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white transition-colors">
+                  <GraduationCap className="w-4 h-4" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold">Peer-Review AI</p>
+                  <p className="text-[10px] text-gray-500">Academic pre-submission audit</p>
+                </div>
+              </Link>
+            </div>
+          )}
         </div>
-        <span className="text-[10px] px-2 py-0.5 rounded-full font-medium"
-              style={{ background: 'rgba(5,150,105,0.12)', color: 'var(--accent-emerald)' }}>
-          v3.0
-        </span>
-      </Link>
+      </div>
 
       {/* Center: Search */}
       <div className="relative">
