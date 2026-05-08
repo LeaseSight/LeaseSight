@@ -1,8 +1,6 @@
 fastapi
 uvicorn
 pandas
+python-dotenv
 python-multipart
 pydantic
-# Add any other libraries you use, like:
-# openai
-# pinecone-client
