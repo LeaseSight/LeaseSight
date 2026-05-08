@@ -4,3 +4,7 @@ pandas
 python-dotenv
 python-multipart
 pydantic
+openai
+pinecone-client
+# Add the specific Azure library you are using (see below)
+azure-ai-formrecognizer
