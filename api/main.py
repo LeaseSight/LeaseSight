@@ -21,6 +21,7 @@ from pinecone import Pinecone
 from api.schemas import EntityStatus, MigrationEntity, AuthKeys
 from api.processor import UniversalProcessor
 from scripts.full_audit import run_full_audit
+from scripts.visual_anchor import find_coordinates
 
 # Directories
 DB_PATH = os.path.join(BASE_DIR, "leasesight.db")
@@ -90,8 +91,8 @@ async def start_migration(
 async def health():
     return {
         "status": "ULTRA_HEALTHY",
-        "version": "1.0.9",
-        "last_sync": "2026-05-09 21:08:00",
+        "version": "1.1.0",
+        "last_sync": "2026-05-09 21:15:00",
         "proxy": os.environ.get("OPENAI_BASE_URL")
     }
 
