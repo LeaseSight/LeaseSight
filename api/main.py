@@ -1,4 +1,4 @@
-import os, sys, json, sqlite3, uuid, hashlib, io
+import os, sys, json, sqlite3, uuid, hashlib, io, time
 # 1. HARDENED PATH RESOLUTION
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, BASE_DIR)
@@ -39,6 +39,15 @@ async def get_api_keys(request: Request) -> AuthKeys:
 
 app = FastAPI(title="LeaseSight Production API")
 
+# --- 3. HARDENED CORS MIDDLEWARE (SUPER HEADER) ---
+@app.middleware("http")
+async def add_cors_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-OpenAI-Key, X-Pinecone-Key, X-User-Id"
+    return response
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -52,8 +61,8 @@ app.add_middleware(
 async def health():
     return {
         "status": "ULTRA_HEALTHY",
-        "version": "1.2.2",
-        "last_sync": "2026-05-09 21:38:00",
+        "version": "1.2.3",
+        "last_sync": "2026-05-09 21:48:00",
         "proxy": os.environ.get("OPENAI_BASE_URL")
     }
 
@@ -67,16 +76,20 @@ async def test_connection(keys: AuthKeys = Depends(get_api_keys)):
         return {"status": "error", "message": str(e)}
 
 @app.post("/api/commit")
-async def commit_audit(request: dict):
-    task_id = request.get("task_id")
-    if not task_id: raise HTTPException(status_code=400, detail="task_id required")
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("UPDATE migration_results SET status = 'APPROVED' WHERE batch_id = ?", (task_id,))
-    c.execute("UPDATE migration_batches SET status = 'COMPLETED' WHERE id = ?", (task_id,))
-    conn.commit()
-    conn.close()
-    return {"status": "success", "message": f"Audit {task_id} approved and committed."}
+async def commit_audit(request: Request):
+    try:
+        data = await request.json()
+        task_id = data.get("task_id")
+        if not task_id: raise HTTPException(status_code=400, detail="task_id required")
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("UPDATE migration_results SET status = 'APPROVED' WHERE batch_id = ?", (task_id,))
+        c.execute("UPDATE migration_batches SET status = 'COMPLETED' WHERE id = ?", (task_id,))
+        conn.commit()
+        conn.close()
+        return {"status": "success"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 @app.post("/api/export/{filename:path}")
 async def export_audit(filename: str, request: dict):
@@ -115,14 +128,23 @@ async def start_audit(request: dict, keys: AuthKeys = Depends(get_api_keys)):
         report.setdefault("obligations", [])
         report.setdefault("warnings", [])
         
+        # --- HARDENED MARKING LOGIC ---
         annotations = []
-        for finding in report.get("findings", []):
-            quote = finding.get("evidence_quote")
-            if quote and len(quote) > 10 and quote != "Not Found":
+        all_items = report.get("findings", []) + report.get("obligations", [])
+        for item in all_items:
+            quote = item.get("evidence_quote")
+            if quote and len(quote) > 15 and quote != "Not Found":
                 coords = find_coordinates(file_name, quote)
                 if coords and "bounding_box" in coords:
                     bbox = coords["bounding_box"]
-                    annotations.append({"page": int(coords.get('page', 1)), "x": bbox[0]['x'], "y": bbox[0]['y'], "width": bbox[2]['x'] - bbox[0]['x'], "height": bbox[2]['y'] - bbox[0]['y'], "color": "#3b82f6"})
+                    annotations.append({
+                        "page": int(coords.get('page', 1)), 
+                        "x": bbox[0]['x'], "y": bbox[0]['y'], 
+                        "width": bbox[2]['x'] - bbox[0]['x'], 
+                        "height": bbox[2]['y'] - bbox[0]['y'], 
+                        "color": "#3b82f6",
+                        "label": item.get("label", "Key Term")
+                    })
         
         report["annotations"] = annotations
         return report
