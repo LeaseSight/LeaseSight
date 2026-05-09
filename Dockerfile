@@ -1,19 +1,23 @@
-# Optimized Dockerfile for LeaseSight
+# Hardened Dockerfile for LeaseSight
 FROM python:3.11-slim
 
-# 1. Environment Fixes
+# 1. Environment Setup
 WORKDIR /app
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
-# 2. Dependency Optimization
+# 2. Dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 3. Application Setup
+# 3. Application context
+# We copy everything, including the data folder
 COPY . .
+
+# 4. Final Fail-Safe: Create necessary dirs
+RUN mkdir -p /app/data/raw_pdfs
+
 EXPOSE 8080
 
-# 4. Correct Startup Command
-# Using "python api/main.py" as requested
-CMD ["python", "api/main.py"]
+# Using absolute path execution for stability
+CMD ["python", "/app/api/main.py"]
