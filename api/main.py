@@ -12,7 +12,6 @@ from typing import List, Optional
 from io import BytesIO
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends, BackgroundTasks, Header
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from openai import OpenAI
 from pinecone import Pinecone
@@ -39,20 +38,7 @@ async def get_api_keys(request: Request) -> AuthKeys:
 
 app = FastAPI(title="LeaseSight Production API")
 
-# --- 3. PRODUCTION CORS MIDDLEWARE ---
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "https://www.leasesights.tech",
-        "https://leasesights.tech",
-        "http://localhost:3000",
-        "http://localhost:8000"
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"]
-)
+# CORS is handled by Caddy reverse proxy, not here
 
 @app.get("/api/health")
 async def health():
