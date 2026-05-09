@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Header } from '@/components/Header';
 import { LeftPane } from '@/components/LeftPane';
 import dynamic from 'next/dynamic';
+import { useUser } from '@clerk/nextjs';
 
 const RightPane = dynamic(() => import('@/components/RightPane').then(mod => mod.RightPane), { 
   ssr: false, 
@@ -25,10 +26,28 @@ export default function Home() {
   const [networkQuery, setNetworkQuery] = useState<string | undefined>(undefined);
   const [documents, setDocuments] = useState<string[]>([]);
 
-  // Fetch documents on load
+  const { user } = useUser();
+  const [backendStatus, setBackendStatus] = useState<'unknown' | 'ok' | 'error'>('unknown');
+
+  // Initialise API auth context with Clerk user ID on mount
+  useEffect(() => {
+    if (user?.id) {
+      import('@/lib/api').then(({ setApiAuthContext }) => {
+        setApiAuthContext(user.id, 'BYOK');
+      });
+    }
+  }, [user?.id]);
+
+  // Fetch documents + ping backend health on load
   useEffect(() => {
     import('@/lib/api').then(({ api }) => {
-      api.documents().then(d => setDocuments(d.documents)).catch(() => {});
+      // Fetch document list
+      api.documents().then(d => setDocuments(d.documents ?? [])).catch(() => {});
+
+      // Ping health endpoint to confirm backend reachability
+      api.health()
+        .then(() => setBackendStatus('ok'))
+        .catch(() => setBackendStatus('error'));
     });
   }, []);
 

@@ -1,7 +1,8 @@
 /**
- * api.ts — LeaseSight Frontend API Service v3.0
+ * api.ts — LeaseSight Frontend API Service v4.0
  *
- * - Reads API keys from localStorage and injects them as headers on every request.
+ * - ALWAYS reads API keys from localStorage and injects them as headers.
+ * - Keys in localStorage override any server-side .env configuration (BYOK).
  * - Catches HTTP 401 responses → redirects to /settings with an "Invalid Key" toast.
  * - All other errors bubble up to the caller.
  */
@@ -10,15 +11,15 @@ import { AuditResult, ChatResponse, LocateResponse, GraphData, HealthStatus, Com
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
 // ---------------------------------------------------------------------------
-// Global Auth Context (Set by AuthGate)
+// Global Auth Context (Set by AuthGate or on login)
 // ---------------------------------------------------------------------------
 
 let globalUserId: string | null = null;
-let globalUserTier: 'BYOK' | 'Managed' | null = 'Managed'; // Default to Managed for developer use
 
 export function setApiAuthContext(userId: string | null, tier: 'BYOK' | 'Managed' | null) {
   globalUserId = userId;
-  globalUserTier = tier || 'Managed';
+  // Tier is kept for future use but key injection is now always active
+  void tier;
 }
 
 // ---------------------------------------------------------------------------
@@ -67,29 +68,28 @@ export class ApiAuthError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Core fetch wrapper — injects headers, handles 401
+// Core fetch wrapper — ALWAYS injects keys from localStorage, handles 401
 // ---------------------------------------------------------------------------
 
 function buildKeyHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
-  
+
   if (globalUserId) {
     headers['X-User-Id'] = globalUserId;
   }
 
-  // Brain Switch Logic
-  if (globalUserTier === 'BYOK') {
-    const keys = getStoredKeys();
-    if (keys.openai) {
-      headers['X-OpenAI-Key'] = keys.openai;
-      headers['X-API-Key']    = keys.openai; // Universal fallback
-    }
-    if (keys.pinecone)      headers['X-Pinecone-Key']    = keys.pinecone;
-    if (keys.azureKey)      headers['X-Azure-Key']       = keys.azureKey;
-    if (keys.azureEndpoint) headers['X-Azure-Endpoint']  = keys.azureEndpoint;
+  // ALWAYS inject keys from localStorage if they exist.
+  // This covers both BYOK users and any user who has saved keys.
+  // The backend will use these over its own .env variables.
+  const keys = getStoredKeys();
+  if (keys.openai) {
+    headers['X-OpenAI-Key'] = keys.openai;
+    headers['X-API-Key']    = keys.openai; // Universal fallback header
   }
-  // If Managed, we send NO keys, telling the backend to use its .env
-  
+  if (keys.pinecone)      headers['X-Pinecone-Key']    = keys.pinecone;
+  if (keys.azureKey)      headers['X-Azure-Key']       = keys.azureKey;
+  if (keys.azureEndpoint) headers['X-Azure-Endpoint']  = keys.azureEndpoint;
+
   return headers;
 }
 
@@ -105,7 +105,7 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
     },
   });
 
-  // 401 — invalid or missing API key
+  // 401 — invalid or missing API key → redirect to settings
   if (res.status === 401) {
     let detail = 'One or more API keys are invalid or missing.';
     try {
@@ -113,7 +113,6 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
       if (body?.detail) detail = body.detail;
     } catch { /* ignore parse error */ }
 
-    // Store the message for the Settings page to display
     if (typeof window !== 'undefined') {
       sessionStorage.setItem('ls_auth_error', detail);
       window.location.href = '/settings';
@@ -130,7 +129,7 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
 // ---------------------------------------------------------------------------
 
 export const api = {
-  testConnection: () => fetchJSON<{ success: boolean; message: string }>('/api/test-connection'),
+  testConnection: () => fetchJSON<{ success: boolean; openai: string; pinecone: string; message: string }>('/api/test-connection'),
 
   health: () => fetchJSON<HealthStatus>('/api/health'),
 
@@ -229,7 +228,7 @@ export const api = {
     return res.json();
   },
 
-  getMigrationStatus: (batchId: string) => 
+  getMigrationStatus: (batchId: string) =>
     fetchJSON<{ batch_id: string; total: number; processed: number; status: string; results: any[] }>(`/api/migrate/status/${batchId}`),
 
   migrationExportUrl: (batchId: string) => `${API_BASE}/api/migrate/export/${batchId}`,

@@ -67,11 +67,11 @@ init_db()
 
 app = FastAPI(title="LeaseSight Production API", version="4.0")
 
-# CORS
+# CORS — allow all origins. Note: allow_credentials must be False with wildcard origins.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -87,16 +87,41 @@ RAW_PDF_DIR.mkdir(parents=True, exist_ok=True)
 async def get_api_keys(request: Request) -> AuthKeys:
     """
     Dependency to resolve API keys.
-    Priority: Request Headers (X-OpenAI-Key, etc.) -> .env (Managed)
+    Priority order per key:
+      1. Specific header (e.g. X-OpenAI-Key)
+      2. Universal header X-API-Key (sent by BYOK frontend)
+      3. Server .env variables (Managed tier fallback)
     """
-    openai_key = request.headers.get("X-OpenAI-Key") or os.getenv("MANAGED_OPENAI_KEY") or os.getenv("OPENAI_API_KEY")
-    pinecone_key = request.headers.get("X-Pinecone-Key") or os.getenv("MANAGED_PINECONE_KEY") or os.getenv("PINECONE_API_KEY")
-    azure_key = request.headers.get("X-Azure-Key") or os.getenv("MANAGED_AZURE_KEY") or os.getenv("AZURE_KEY")
-    azure_endpoint = request.headers.get("X-Azure-Endpoint") or os.getenv("MANAGED_AZURE_ENDPOINT") or os.getenv("AZURE_ENDPOINT")
-    
+    universal_key = request.headers.get("X-API-Key")
+
+    openai_key = (
+        request.headers.get("X-OpenAI-Key")
+        or universal_key
+        or os.getenv("MANAGED_OPENAI_KEY")
+        or os.getenv("OPENAI_API_KEY")
+    )
+    pinecone_key = (
+        request.headers.get("X-Pinecone-Key")
+        or os.getenv("MANAGED_PINECONE_KEY")
+        or os.getenv("PINECONE_API_KEY")
+    )
+    azure_key = (
+        request.headers.get("X-Azure-Key")
+        or os.getenv("MANAGED_AZURE_KEY")
+        or os.getenv("AZURE_KEY")
+    )
+    azure_endpoint = (
+        request.headers.get("X-Azure-Endpoint")
+        or os.getenv("MANAGED_AZURE_ENDPOINT")
+        or os.getenv("AZURE_ENDPOINT")
+    )
+
     if not openai_key:
-        raise HTTPException(status_code=401, detail="No OpenAI API key provided or configured.")
-        
+        raise HTTPException(
+            status_code=401,
+            detail="No OpenAI API key provided. Add your key in Settings or configure OPENAI_API_KEY on the server."
+        )
+
     return AuthKeys(
         openai_key=openai_key,
         pinecone_key=pinecone_key,
@@ -371,8 +396,30 @@ async def list_documents():
     return {"documents": pdfs, "count": len(pdfs)}
 
 @app.get("/api/health")
-async def health():
-    return {"status": "healthy", "version": "4.0", "timestamp": datetime.now().isoformat()}
+async def health(request: Request):
+    """
+    Returns backend health AND the connection status of configured services.
+    The frontend Header component reads openai/pinecone to drive the status dot.
+    """
+    # Check which keys are available (header BYOK takes priority over env)
+    openai_key = (
+        request.headers.get("X-OpenAI-Key")
+        or request.headers.get("X-API-Key")
+        or os.getenv("MANAGED_OPENAI_KEY")
+        or os.getenv("OPENAI_API_KEY")
+    )
+    pinecone_key = (
+        request.headers.get("X-Pinecone-Key")
+        or os.getenv("MANAGED_PINECONE_KEY")
+        or os.getenv("PINECONE_API_KEY")
+    )
+    return {
+        "status": "healthy",
+        "version": "4.0",
+        "timestamp": datetime.now().isoformat(),
+        "openai": "connected" if openai_key else "missing",
+        "pinecone": "connected" if pinecone_key else "missing",
+    }
 
 @app.get("/api/migrate/status/{batch_id}")
 async def get_migration_status(batch_id: str):
