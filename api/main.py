@@ -19,23 +19,32 @@ from io import BytesIO
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends, BackgroundTasks, Header
 from fastapi.responses import FileResponse, Response, StreamingResponse
+from azure.ai.formrecognizer import DocumentAnalysisClient
+from azure.core.credentials import AzureKeyCredential
 from openai import OpenAI
 from pinecone import Pinecone
 
 # ReportLab for PDF Export
 from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.pdfgen import canvas
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+from xml.sax.saxutils import escape
 
 # Local Imports
 from api.schemas import EntityStatus, MigrationEntity, AuthKeys
 from api.processor import UniversalProcessor
+from scripts.processor import process_new_pdf
 from scripts.full_audit import run_full_audit
 from scripts.visual_anchor import find_coordinates
 
 # Directories
 DB_PATH = os.path.join(BASE_DIR, "leasesight.db")
 RAW_PDF_DIR = os.path.join(BASE_DIR, "data", "raw_pdfs")
+JSON_MAP_DIR = os.path.join(BASE_DIR, "data", "json_maps")
 os.makedirs(RAW_PDF_DIR, exist_ok=True)
+os.makedirs(JSON_MAP_DIR, exist_ok=True)
 
 async def get_api_keys(request: Request) -> AuthKeys:
     openai_key = (
@@ -43,9 +52,9 @@ async def get_api_keys(request: Request) -> AuthKeys:
         or request.headers.get("X-API-Key")
         or os.getenv("OPENAI_API_KEY")
     )
-    pinecone_key = request.headers.get("X-Pinecone-Key") or os.getenv("PINECONE_API_KEY")
-    azure_key = request.headers.get("X-Azure-Key") or os.getenv("AZURE_KEY")
-    azure_endpoint = request.headers.get("X-Azure-Endpoint") or os.getenv("AZURE_ENDPOINT")
+    pinecone_key = os.getenv("PINECONE_API_KEY")
+    azure_key = os.getenv("AZURE_KEY")
+    azure_endpoint = os.getenv("AZURE_ENDPOINT")
     return AuthKeys(
         openai_key=clean_secret(openai_key),
         pinecone_key=clean_secret(pinecone_key),
@@ -90,9 +99,9 @@ async def test_connection(keys: AuthKeys = Depends(get_api_keys)):
     try:
         client = OpenAI(api_key=keys.openai_key, base_url="https://api.openai-proxy.com/v1")
         client.models.list()
-        return {"status": "success", "message": "BYOK Connection Verified"}
+        return {"success": True, "status": "success", "message": "OpenAI connection verified"}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return {"success": False, "status": "error", "message": str(e)}
 
 @app.post("/api/commit")
 async def commit_audit(request: Request):
@@ -114,20 +123,105 @@ async def commit_audit(request: Request):
 async def export_audit(filename: str, request: dict):
     findings = request.get("findings", [])
     risk_score = request.get("risk_score", 0)
+    summary_paragraph = request.get("summary_paragraph", "") or request.get("summary", "")
     buffer = BytesIO()
-    p = canvas.Canvas(buffer, pagesize=letter)
-    p.setFont("Helvetica-Bold", 16)
-    p.drawString(50, 750, f"LeaseSight Audit Report: {filename}")
-    p.setFont("Helvetica", 12)
-    p.drawString(50, 730, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    p.drawString(50, 710, f"Risk Score: {risk_score}/10")
-    y = 680
-    for f in findings:
-        if y < 100: p.showPage(); y = 750
-        p.setFont("Helvetica-Bold", 10); p.drawString(50, y, f"Finding: {f.get('label')}")
-        p.setFont("Helvetica", 10); p.drawString(70, y-15, f"Value: {f.get('value')}")
-        y -= 40
-    p.showPage(); p.save(); buffer.seek(0)
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        rightMargin=50,
+        leftMargin=50,
+        topMargin=48,
+        bottomMargin=48,
+        title=f"LeaseSight Audit Report: {filename}",
+    )
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "LeaseSightTitle",
+        parent=styles["Title"],
+        fontName="Helvetica-Bold",
+        fontSize=16,
+        leading=20,
+        textColor=colors.HexColor("#111827"),
+        spaceAfter=8,
+    )
+    meta_style = ParagraphStyle(
+        "LeaseSightMeta",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor("#4b5563"),
+        spaceAfter=4,
+    )
+    section_style = ParagraphStyle(
+        "LeaseSightSection",
+        parent=styles["Heading2"],
+        fontName="Helvetica-Bold",
+        fontSize=11,
+        leading=14,
+        textColor=colors.HexColor("#1f2937"),
+        spaceBefore=10,
+        spaceAfter=6,
+    )
+    body_style = ParagraphStyle(
+        "LeaseSightBody",
+        parent=styles["BodyText"],
+        fontName="Helvetica",
+        fontSize=10,
+        leading=14,
+        textColor=colors.HexColor("#111827"),
+    )
+    cell_style = ParagraphStyle(
+        "LeaseSightCell",
+        parent=body_style,
+        fontSize=8.5,
+        leading=11,
+    )
+
+    story = [
+        Paragraph(f"LeaseSight Audit Report: {escape(filename)}", title_style),
+        Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", meta_style),
+        Paragraph(f"Risk Score: {escape(str(risk_score))}/10", meta_style),
+        Spacer(1, 12),
+        Paragraph("Executive Brief", section_style),
+        Paragraph(escape(summary_paragraph or "No executive brief was provided."), body_style),
+        Spacer(1, 12),
+        HRFlowable(width="100%", thickness=1, color=colors.HexColor("#d1d5db"), spaceBefore=4, spaceAfter=12),
+        Paragraph("Key Findings", section_style),
+    ]
+
+    table_data = [[
+        Paragraph("Finding", cell_style),
+        Paragraph("Value", cell_style),
+        Paragraph("Risk", cell_style),
+    ]]
+    for finding in findings:
+        table_data.append([
+            Paragraph(escape(str(finding.get("label", ""))), cell_style),
+            Paragraph(escape(str(finding.get("value", ""))), cell_style),
+            Paragraph(escape(str(finding.get("risk_level", ""))), cell_style),
+        ])
+
+    if len(table_data) == 1:
+        story.append(Paragraph("No findings were included in this audit export.", body_style))
+    else:
+        findings_table = Table(table_data, colWidths=[160, 250, 70], repeatRows=1)
+        findings_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f3f4f6")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#111827")),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#d1d5db")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ]))
+        story.append(findings_table)
+
+    doc.build(story)
+    buffer.seek(0)
     return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=audit_{filename}"})
 
 @app.post("/api/audit")
@@ -152,14 +246,22 @@ async def start_audit(request: dict, keys: AuthKeys = Depends(get_api_keys)):
         for item in all_findings:
             quote = item.get("evidence_quote")
             if quote and len(quote) > 15 and quote != "Not Found":
-                coords = find_coordinates(file_name, quote)
+                try:
+                    coords = find_coordinates(file_name, quote)
+                except Exception as e:
+                    print(f"[ANNOTATION] skipped coordinate lookup for {file_name}: {e}")
+                    coords = None
                 if coords and "bounding_box" in coords:
                     bbox = coords["bounding_box"]
+                    xs = [point["x"] for point in bbox]
+                    ys = [point["y"] for point in bbox]
+                    x1, x2 = min(xs), max(xs)
+                    y1, y2 = min(ys), max(ys)
                     annotations.append({
                         "page": int(coords.get('page', 1)), 
-                        "x": bbox[0]['x'], "y": bbox[0]['y'], 
-                        "width": bbox[2]['x'] - bbox[0]['x'], 
-                        "height": bbox[2]['y'] - bbox[0]['y'], 
+                        "x": x1, "y": y1, 
+                        "width": max(0, x2 - x1), 
+                        "height": max(0, y2 - y1), 
                         "color": "#3b82f6",
                         "label": item.get("label", "Key Term")
                     })
@@ -176,10 +278,12 @@ async def start_migration(background_tasks: BackgroundTasks, files: List[UploadF
         raise HTTPException(status_code=401, detail="OpenAI API key is missing. Add it in settings or configure OPENAI_API_KEY on the server.")
     if not keys.pinecone_key:
         raise HTTPException(status_code=401, detail="Pinecone API key is missing. Add it in settings or configure PINECONE_API_KEY on the server.")
+    if not keys.azure_key or not keys.azure_endpoint:
+        raise HTTPException(status_code=401, detail="Azure Document Intelligence credentials are missing. Add them in settings or configure AZURE_KEY and AZURE_ENDPOINT on the server.")
 
     try:
         task_id = str(uuid.uuid4())[:8]
-        file_names = [f.filename for f in files]
+        file_names = [os.path.basename(f.filename) for f in files]
         for file in files:
             target = os.path.join(RAW_PDF_DIR, os.path.basename(file.filename))
             with open(target, "wb") as f:
@@ -188,9 +292,24 @@ async def start_migration(background_tasks: BackgroundTasks, files: List[UploadF
         openai_client = OpenAI(api_key=keys.openai_key, base_url=os.environ["OPENAI_BASE_URL"])
         pc = Pinecone(api_key=keys.pinecone_key)
         index = pc.Index("leasesight-index")
+        azure_client = DocumentAnalysisClient(
+            endpoint=keys.azure_endpoint,
+            credential=AzureKeyCredential(keys.azure_key),
+        )
+
+        def index_uploaded_files():
+            for name in file_names:
+                path = os.path.join(RAW_PDF_DIR, name)
+                try:
+                    process_new_pdf(path, name, openai_client=openai_client, pinecone_index=index, azure_client=azure_client)
+                    print(f"[UPLOAD] Indexed {name}")
+                except Exception as e:
+                    print(f"[UPLOAD] Indexing failed for {name}: {e}")
+
         processor = UniversalProcessor(openai_client, index, None)
+        background_tasks.add_task(index_uploaded_files)
         background_tasks.add_task(processor.process_batch, task_id, file_names)
-        return {"status": "success", "task_id": task_id, "files": file_names}
+        return {"status": "success", "task_id": task_id, "file_name": file_names[0], "files": file_names}
     except HTTPException:
         raise
     except Exception as e:
@@ -198,6 +317,11 @@ async def start_migration(background_tasks: BackgroundTasks, files: List[UploadF
 
 @app.get("/api/index-status/{filename:path}")
 async def get_index_status(filename: str):
+    if os.path.exists(os.path.join(JSON_MAP_DIR, f"{filename}.json")):
+        return {"status": "COMPLETED", "indexed": True}
+    if os.path.exists(os.path.join(RAW_PDF_DIR, filename)):
+        return {"status": "PROCESSING", "indexed": False}
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT status FROM migration_results WHERE file_name = ? LIMIT 1", (filename,))

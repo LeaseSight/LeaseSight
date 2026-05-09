@@ -1,18 +1,20 @@
 import type { Metadata } from "next";
+import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "LeaseSight — AI Legal Auditor",
-  description: "Intelligent contract analysis powered by multi-agent AI orchestration",
+  title: "LeaseSight - AI Lease Auditing",
+  description: "AI-powered lease auditing for industrial excellence.",
   keywords: ["lease audit", "AI legal", "contract analysis", "LeaseSight"],
+  icons: {
+    icon: "/icon.svg",
+  },
 };
-
-import { ClerkProvider } from '@clerk/nextjs';
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <ClerkProvider>
-      <html lang="en" suppressHydrationWarning>
+      <html lang="en" data-scroll-behavior="smooth" suppressHydrationWarning>
         <head>
           <link rel="preconnect" href="https://fonts.googleapis.com" />
           <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />

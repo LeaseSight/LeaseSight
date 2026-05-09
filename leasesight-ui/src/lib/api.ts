@@ -1,25 +1,25 @@
 /**
  * api.ts — LeaseSight Frontend API Service v4.0
  *
- * - ALWAYS reads API keys from localStorage and injects them as headers.
- * - Keys in localStorage override any server-side .env configuration (BYOK).
+ * - Free/BYOK users send only their OpenAI key.
+ * - Pro/Managed users use server-side OpenAI, Azure, and Pinecone keys.
  * - Catches HTTP 401 responses → redirects to /settings with an "Invalid Key" toast.
  * - All other errors bubble up to the caller.
  */
 import { AuditResult, ChatResponse, LocateResponse, GraphData, HealthStatus, CommitResult } from './types';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://api.leasesights.tech';
 
 // ---------------------------------------------------------------------------
 // Global Auth Context (Set by AuthGate or on login)
 // ---------------------------------------------------------------------------
 
 let globalUserId: string | null = null;
+let globalTier: 'BYOK' | 'Managed' | null = null;
 
 export function setApiAuthContext(userId: string | null, tier: 'BYOK' | 'Managed' | null) {
   globalUserId = userId;
-  // Tier is kept for future use but key injection is now always active
-  void tier;
+  globalTier = tier;
 }
 
 // ---------------------------------------------------------------------------
@@ -53,7 +53,22 @@ export function saveStoredKeys(keys: Partial<StoredKeys>) {
 
 export function hasStoredKeys(): boolean {
   const k = getStoredKeys();
-  return !!(k.openai && k.pinecone);
+  return !!k.openai;
+}
+
+export type SubscriptionTier = 'free' | 'pro';
+
+export function getSelectedTier(): SubscriptionTier | null {
+  if (typeof window === 'undefined') return null;
+  const tier = localStorage.getItem('ls_subscription_tier');
+  return tier === 'free' || tier === 'pro' ? tier : null;
+}
+
+export function saveSelectedTier(tier: SubscriptionTier) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem('ls_subscription_tier', tier);
+  document.cookie = `ls_has_selected_package=true; path=/; max-age=31536000; SameSite=Lax`;
+  document.cookie = `ls_subscription_tier=${tier}; path=/; max-age=31536000; SameSite=Lax`;
 }
 
 // ---------------------------------------------------------------------------
@@ -78,16 +93,12 @@ function buildKeyHeaders(): Record<string, string> {
     headers['X-User-Id'] = globalUserId;
   }
 
-  // ALWAYS inject keys from localStorage if they exist.
-  // This covers both BYOK users and any user who has saved keys.
-  // The backend will use these over its own .env variables.
+  const selectedTier = getSelectedTier();
+  const isByok = globalTier === 'BYOK' || selectedTier === 'free';
   const keys = getStoredKeys();
-  if (keys.openai) {
+  if (isByok && keys.openai) {
     headers['X-OpenAI-Key'] = keys.openai;
   }
-  if (keys.pinecone)      headers['X-Pinecone-Key']    = keys.pinecone;
-  if (keys.azureKey)      headers['X-Azure-Key']       = keys.azureKey;
-  if (keys.azureEndpoint) headers['X-Azure-Endpoint']  = keys.azureEndpoint;
 
   return headers;
 }
@@ -128,7 +139,7 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
 // ---------------------------------------------------------------------------
 
 export const api = {
-  testConnection: () => fetchJSON<{ success: boolean; openai: string; pinecone: string; message: string }>('/api/test-connection'),
+  testConnection: () => fetchJSON<{ success?: boolean; status?: string; openai?: string; pinecone?: string; message: string }>('/api/test-connection'),
 
   health: () => fetchJSON<HealthStatus>('/api/health'),
 

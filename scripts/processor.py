@@ -1,5 +1,6 @@
 import os
 import json
+import time
 from pathlib import Path
 from azure.ai.formrecognizer import DocumentAnalysisClient
 from azure.core.credentials import AzureKeyCredential
@@ -8,6 +9,28 @@ from pinecone import Pinecone
 from dotenv import load_dotenv
 
 load_dotenv()
+
+def _is_rate_limited(error):
+    text = str(error).lower()
+    return "429" in text or "too many requests" in text or "rate limit" in text or "openresty" in text
+
+def _create_embedding_with_retry(openai_client, text, attempts=4):
+    last_error = None
+    for attempt in range(attempts):
+        try:
+            emb_res = openai_client.embeddings.create(input=text, model="text-embedding-3-small")
+            return emb_res.data[0].embedding
+        except Exception as e:
+            last_error = e
+            if attempt < attempts - 1 and _is_rate_limited(e):
+                wait = 8 * (attempt + 1)
+                print(f"[INGEST] Embedding rate limited. Waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            if attempt < attempts - 1:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise last_error
 
 
 def process_new_pdf(pdf_path, file_name, openai_client=None, pinecone_index=None, azure_client=None):
@@ -48,25 +71,37 @@ def process_new_pdf(pdf_path, file_name, openai_client=None, pinecone_index=None
             })
             page_text += line.content + " "
 
-        spatial_data["pages"].append({"page_number": page.page_number, "lines": lines})
-
-        # 2. OpenAI Embedding + Pinecone Upsert
-        emb_res = openai_client.embeddings.create(input=page_text, model="text-embedding-3-small")
-        vector = emb_res.data[0].embedding
-
-        metadata = {
-            "file_name": file_name,
+        spatial_data["pages"].append({
             "page_number": page.page_number,
-            "text": page_text[:2000],
-            "coords": json.dumps(lines[0]['bounding_box'] if lines else [])
-        }
-        pinecone_index.upsert(vectors=[(f"{file_name}_p{page.page_number}", vector, metadata)])
+            "width": getattr(page, "width", 8.5),
+            "height": getattr(page, "height", 11.0),
+            "unit": getattr(page, "unit", "inch"),
+            "lines": lines,
+        })
 
-    # 3. Save JSON spatial map for visual grounding
+    # Save JSON spatial map before embeddings so the audit pipeline can use the
+    # extracted text even if vector indexing is throttled.
     BASE_DIR = Path(__file__).resolve().parents[1]
     json_path = BASE_DIR / "data" / "json_maps" / f"{file_name}.json"
     json_path.parent.mkdir(parents=True, exist_ok=True)
     with open(json_path, "w") as f:
         json.dump(spatial_data, f, indent=4)
+
+    for page in spatial_data["pages"]:
+        page_text = " ".join(line.get("content", "") for line in page.get("lines", []))
+        page_number = page.get("page_number", 1)
+
+        # 2. OpenAI Embedding + Pinecone Upsert.
+        try:
+            vector = _create_embedding_with_retry(openai_client, page_text)
+            metadata = {
+                "file_name": file_name,
+                "page_number": page_number,
+                "text": page_text[:2000],
+                "coords": json.dumps(page["lines"][0]['bounding_box'] if page.get("lines") else [])
+            }
+            pinecone_index.upsert(vectors=[(f"{file_name}_p{page_number}", vector, metadata)])
+        except Exception as e:
+            print(f"[INGEST] Skipping vector upsert for {file_name} page {page_number}: {e}")
 
     return json_path

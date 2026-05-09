@@ -1,34 +1,38 @@
 'use client';
 
 import { useState, useCallback, useEffect } from 'react';
-import { Header } from '@/components/Header';
-import { LeftPane } from '@/components/LeftPane';
 import dynamic from 'next/dynamic';
 import { useUser } from '@clerk/nextjs';
-
-const RightPane = dynamic(() => import('@/components/RightPane').then(mod => mod.RightPane), { 
-  ssr: false, 
-  loading: () => <div className="flex-1 flex flex-col items-center justify-center bg-[#1a1a2e] text-white text-xs">Loading Document Engine...</div> 
-});
+import { FileText, ListChecks } from 'lucide-react';
+import { Header } from '@/components/Header';
+import { LeftPane } from '@/components/LeftPane';
 import { ChatOverlay } from '@/components/ChatOverlay';
 import { NetworkPanel } from '@/components/NetworkPanel';
 import { AuditResult, Annotation } from '@/lib/types';
 
-export default function Home() {
+const RightPane = dynamic(() => import('@/components/RightPane').then(mod => mod.RightPane), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full flex-col items-center justify-center bg-[#F9FAFB] text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+      Loading Document Engine
+    </div>
+  ),
+});
+
+export default function AuditDashboard() {
   const [selectedDoc, setSelectedDoc] = useState<string | null>(null);
   const [auditResult, setAuditResult] = useState<AuditResult | null>(null);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
-  const [targetPage, setTargetPage] = useState<number | null>(1);
+  const [targetPage, setTargetPage] = useState<number>(1);
   const [isAuditing, setIsAuditing] = useState(false);
   const [showNetwork, setShowNetwork] = useState(false);
   const [isCommitted, setIsCommitted] = useState(false);
   const [networkQuery, setNetworkQuery] = useState<string | undefined>(undefined);
   const [documents, setDocuments] = useState<string[]>([]);
+  const [mobileTab, setMobileTab] = useState<'document' | 'analysis'>('document');
 
   const { user } = useUser();
-  const [backendStatus, setBackendStatus] = useState<'unknown' | 'ok' | 'error'>('unknown');
 
-  // Initialise API auth context with Clerk user ID on mount
   useEffect(() => {
     if (user?.id) {
       import('@/lib/api').then(({ setApiAuthContext }) => {
@@ -37,22 +41,17 @@ export default function Home() {
     }
   }, [user?.id]);
 
-  // Fetch documents + ping backend health on load
   useEffect(() => {
     import('@/lib/api').then(({ api }) => {
-      // Fetch document list
       api.documents().then(d => setDocuments(d.documents ?? [])).catch(() => {});
-
-      // Ping health endpoint to confirm backend reachability
-      api.health()
-        .then(() => setBackendStatus('ok'))
-        .catch(() => setBackendStatus('error'));
+      api.health().catch(() => {});
     });
   }, []);
 
   const handleLocate = useCallback((annotation: Annotation) => {
     setAnnotations([annotation]);
     setTargetPage(annotation.page ?? 1);
+    setMobileTab('document');
   }, []);
 
   const handleMapQuery = useCallback((query: string) => {
@@ -64,11 +63,41 @@ export default function Home() {
     setAuditResult(result);
     setAnnotations(result.annotations || []);
     setIsAuditing(false);
+    setMobileTab('analysis');
   }, []);
 
+  const handleAuditStart = useCallback(() => {
+    setAuditResult(null);
+    setAnnotations([]);
+    setIsAuditing(true);
+    setMobileTab('analysis');
+  }, []);
+
+  const documentPane = (
+    <RightPane
+      selectedDoc={selectedDoc}
+      annotations={annotations}
+      targetPage={targetPage}
+    />
+  );
+
+  const analysisPane = (
+    <LeftPane
+      documents={documents}
+      setDocuments={setDocuments}
+      selectedDoc={selectedDoc}
+      onSelectDoc={setSelectedDoc}
+      auditResult={auditResult}
+      isAuditRunning={isAuditing}
+      onAuditStart={handleAuditStart}
+      onAuditComplete={handleAuditComplete}
+      onLocate={handleLocate}
+      onCommitChange={setIsCommitted}
+    />
+  );
+
   return (
-    <div className="h-screen flex flex-col overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
-      {/* Global Header */}
+    <div className="flex h-screen flex-col overflow-hidden bg-[#F9FAFB]">
       <Header
         isAuditing={isAuditing}
         onToggleNetwork={() => {
@@ -79,35 +108,45 @@ export default function Home() {
         onSelectDoc={setSelectedDoc}
       />
 
-      {/* Dual-Pane Workstation */}
-      <div className="flex-1 flex min-h-0">
-        {/* Left Pane — Auditor */}
-        <div className="w-[480px] min-w-[400px] flex flex-col border-r"
-             style={{ borderColor: 'var(--border-default)', background: 'var(--bg-secondary)' }}>
-          <LeftPane
-            documents={documents}
-            setDocuments={setDocuments}
-            selectedDoc={selectedDoc}
-            onSelectDoc={setSelectedDoc}
-            auditResult={auditResult}
-            onAuditStart={() => setIsAuditing(true)}
-            onAuditComplete={handleAuditComplete}
-            onLocate={handleLocate}
-            onCommitChange={setIsCommitted}
-          />
-        </div>
+      <div className="hidden min-h-0 flex-1 lg:flex">
+        <section className="flex min-w-0 flex-1 flex-col border-r border-[var(--border-default)] bg-[#F9FAFB]">
+          {documentPane}
+        </section>
+        <aside className="flex w-[440px] min-w-[380px] flex-col bg-white xl:w-[480px]">
+          {analysisPane}
+        </aside>
+      </div>
 
-        {/* Right Pane — Viewer */}
-        <div className="flex-1 flex flex-col min-w-0" style={{ background: 'var(--bg-primary)' }}>
-          <RightPane
-            selectedDoc={selectedDoc}
-            annotations={annotations}
-            targetPage={targetPage}
-          />
+      <div className="flex min-h-0 flex-1 flex-col lg:hidden">
+        <div className="grid grid-cols-2 gap-2 border-b border-[var(--border-default)] bg-white p-2">
+          <button
+            onClick={() => setMobileTab('document')}
+            className={`flex items-center justify-center gap-2 border px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] transition hover:-translate-y-0.5 ${
+              mobileTab === 'document'
+                ? 'border-[#1A1A1A] bg-[#1A1A1A] text-white'
+                : 'border-slate-200 bg-white text-slate-500'
+            }`}
+          >
+            <FileText className="h-4 w-4" />
+            Document
+          </button>
+          <button
+            onClick={() => setMobileTab('analysis')}
+            className={`flex items-center justify-center gap-2 border px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] transition hover:-translate-y-0.5 ${
+              mobileTab === 'analysis'
+                ? 'border-[#1A1A1A] bg-[#1A1A1A] text-white'
+                : 'border-slate-200 bg-white text-slate-500'
+            }`}
+          >
+            <ListChecks className="h-4 w-4" />
+            Analysis
+          </button>
+        </div>
+        <div className="min-h-0 flex-1">
+          {mobileTab === 'document' ? documentPane : analysisPane}
         </div>
       </div>
 
-      {/* Bottom Network Panel (retractable) */}
       {showNetwork && selectedDoc && (
         <NetworkPanel
           selectedDoc={selectedDoc}
@@ -120,7 +159,6 @@ export default function Home() {
         />
       )}
 
-      {/* Chat Overlay */}
       {selectedDoc && (
         <ChatOverlay
           selectedDoc={selectedDoc}

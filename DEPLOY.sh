@@ -24,7 +24,13 @@ api.leasesights.tech {
     }
 
     # NOW set fresh CORS headers - single source of truth
-    header Access-Control-Allow-Origin "https://www.leasesights.tech"
+    @allowed_origin {
+        header Origin https://www.leasesights.tech
+        header Origin http://localhost:3000
+        header Origin http://127.0.0.1:3000
+    }
+    header @allowed_origin Access-Control-Allow-Origin "{http.request.header.Origin}"
+    header Vary "Origin"
     header Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE, PATCH"
     header Access-Control-Allow-Headers "Content-Type, Authorization, X-OpenAI-Key, X-API-Key, x-api-key, X-Pinecone-Key, X-Azure-Key, X-Azure-Endpoint, X-User-ID, x-user-id"
     header Access-Control-Allow-Credentials "true"
@@ -74,6 +80,7 @@ docker run -d \
   --name leasesight-api \
   -p 8080:8080 \
   --env-file /home/azureuser/LeaseSight/.env \
+  -v /home/azureuser/LeaseSight/data:/app/data \
   --restart unless-stopped \
   leasesight-backend:latest
 echo "  ✓ Backend restarted"

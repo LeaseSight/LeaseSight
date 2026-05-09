@@ -2,16 +2,106 @@
 import json
 import re
 import glob
+import statistics
 from pathlib import Path
 
 # Absolute path for reliability
-BASE_DIR = Path(r"C:\Users\zain\OneDrive\Desktop\LeaseSight")
+BASE_DIR = Path(__file__).resolve().parents[1]
 JSON_MAP_DIR = BASE_DIR / "data" / "json_maps"
+VIEWER_PAGE_WIDTH = 8.5
+VIEWER_PAGE_HEIGHT = 11.0
+VERTICAL_PADDING = 2.0 / 72.0
 
 
 def clean_text(text):
     """Removes non-alphanumeric characters for robust OCR/AI fuzzy matching."""
     return re.sub(r'[^a-zA-Z0-9]', '', str(text)).lower()
+
+def _page_dimensions(page):
+    width = page.get("width") or page.get("page_width") or VIEWER_PAGE_WIDTH
+    height = page.get("height") or page.get("page_height") or VIEWER_PAGE_HEIGHT
+    try:
+        return float(width), float(height)
+    except (TypeError, ValueError):
+        return VIEWER_PAGE_WIDTH, VIEWER_PAGE_HEIGHT
+
+def _normalize_point(point, page_width, page_height):
+    x = float(point.get("x", 0))
+    y = float(point.get("y", 0))
+
+    if page_width <= 1.5 and page_height <= 1.5:
+        return {"x": x * VIEWER_PAGE_WIDTH, "y": y * VIEWER_PAGE_HEIGHT}
+    if page_width <= 100 and page_height <= 100 and (x > VIEWER_PAGE_WIDTH or y > VIEWER_PAGE_HEIGHT):
+        return {"x": (x / 100.0) * VIEWER_PAGE_WIDTH, "y": (y / 100.0) * VIEWER_PAGE_HEIGHT}
+
+    return {
+        "x": (x / page_width) * VIEWER_PAGE_WIDTH if page_width else x,
+        "y": (y / page_height) * VIEWER_PAGE_HEIGHT if page_height else y,
+    }
+
+def _line_rect(line, page_width, page_height):
+    bbox = line.get("bounding_box", [])
+    if not bbox or len(bbox) < 4:
+        return None
+    points = [_normalize_point(point, page_width, page_height) for point in bbox[:4]]
+    xs = [point["x"] for point in points]
+    ys = [point["y"] for point in points]
+    return {
+        "x1": min(xs),
+        "x2": max(xs),
+        "y1": min(ys),
+        "y2": max(ys),
+        "height": max(ys) - min(ys),
+    }
+
+def _rect_to_bbox(rect):
+    return [
+        {"x": rect["x1"], "y": rect["y1"]},
+        {"x": rect["x2"], "y": rect["y1"]},
+        {"x": rect["x2"], "y": rect["y2"]},
+        {"x": rect["x1"], "y": rect["y2"]},
+    ]
+
+def _normalized_quote_box(lines, page_width, page_height):
+    rects = []
+    for line in lines:
+        rect = _line_rect(line, page_width, page_height)
+        if rect:
+            rects.append(rect)
+    if not rects:
+        return None
+
+    median_y = statistics.median(rect["y1"] for rect in rects)
+    median_height = statistics.median(rect["height"] for rect in rects)
+    y1 = max(0, median_y - VERTICAL_PADDING)
+    y2 = min(VIEWER_PAGE_HEIGHT, median_y + median_height + VERTICAL_PADDING)
+
+    return _rect_to_bbox({
+        "x1": max(0, min(rect["x1"] for rect in rects)),
+        "x2": min(VIEWER_PAGE_WIDTH, max(rect["x2"] for rect in rects)),
+        "y1": y1,
+        "y2": y2,
+    })
+
+def _matching_lines(page, snippet):
+    lines = page.get("lines", [])
+    clean_snippet = clean_text(snippet)
+    if not clean_snippet:
+        return []
+
+    for line in lines:
+        if clean_snippet[:25] in clean_text(line.get("content", "")):
+            return [line]
+
+    max_window = min(6, len(lines))
+    for size in range(2, max_window + 1):
+        for start in range(0, len(lines) - size + 1):
+            window = lines[start:start + size]
+            merged = clean_text(" ".join(line.get("content", "") for line in window))
+            if clean_snippet[: min(60, len(clean_snippet))] in merged:
+                return window
+
+    return []
 
 
 def _resolve_json_path(file_name):
@@ -20,6 +110,9 @@ def _resolve_json_path(file_name):
     Handles Windows filename suffixes like ' (1)' via glob matching.
     Returns the Path or None if no match is found.
     """
+    if not JSON_MAP_DIR.exists():
+        return None
+
     # 1. Direct match: <filename>.json  (e.g., "doc.pdf" -> "doc.pdf.json")
     direct = JSON_MAP_DIR / f"{file_name}.json"
     if direct.exists():
@@ -80,20 +173,16 @@ def find_coordinates(file_name, snippet):
     if not search_target:
         return None
 
-    # Search through the Azure 'Digital Twin'
     for page in data.get('pages', []):
-        for line in page.get('lines', []):
-            content = line.get('content', "")
-            if search_target in clean_text(content):
-                bbox = line.get("bounding_box", [])
-                # Validate: must have at least 4 coordinate points
-                if bbox and len(bbox) >= 4:
-                    # Return structured {x, y} dicts and integer page number
-                    return {
-                        "page": int(page.get('page_number', 1)),
-                        "bounding_box": [
-                            {"x": point["x"], "y": point["y"]}
-                            for point in bbox[:4]
-                        ]
-                    }
+        matched_lines = _matching_lines(page, snippet)
+        if not matched_lines:
+            continue
+
+        page_width, page_height = _page_dimensions(page)
+        bbox = _normalized_quote_box(matched_lines, page_width, page_height)
+        if bbox:
+            return {
+                "page": int(page.get('page_number', 1)),
+                "bounding_box": bbox
+            }
     return None

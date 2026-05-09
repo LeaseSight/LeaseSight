@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Activity, Search, Zap, Wifi, WifiOff, Network, Settings, KeyRound, ChevronDown, Database, LayoutPanelLeft, FileStack, GraduationCap } from 'lucide-react';
+import { Activity, Search, Wifi, WifiOff, Network, Settings, KeyRound, ChevronDown, Database, LayoutPanelLeft, GraduationCap } from 'lucide-react';
 import { api, hasStoredKeys } from '@/lib/api';
+import { BrandLogo } from './BrandLogo';
 
 interface HeaderProps {
   isAuditing: boolean;
@@ -33,32 +34,19 @@ export function Header({ isAuditing, onToggleNetwork, documents, onSelectDoc }: 
   const isConnected = health?.pinecone === 'connected' && health?.openai === 'connected';
 
   return (
-    <header className="h-12 flex items-center justify-between px-4 border-b glass shrink-0"
+    <header className="h-14 flex items-center justify-between px-4 border-b glass shrink-0"
             style={{ borderColor: 'var(--border-default)', zIndex: 40, position: 'relative' }}>
 
       {/* Left: Logo + Brand + Switcher */}
       <div className="flex items-center gap-6">
-        <Link href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
-          <div className="flex items-center gap-2">
-            <Zap className="w-4 h-4" style={{ color: 'var(--accent-emerald)' }} />
-            <span className="font-bold text-sm tracking-widest" style={{
-              color: 'var(--text-primary)',
-              background: 'var(--brand-gradient)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              backgroundClip: 'text',
-            }}>
-              LEASESIGHT
-            </span>
-          </div>
-        </Link>
+        <BrandLogo className="hover:opacity-80 transition-opacity" />
 
         {/* Service Switcher */}
         <div className="relative">
           <button 
             onClick={() => setIsServicesOpen(!isServicesOpen)}
             onBlur={() => setTimeout(() => setIsServicesOpen(false), 200)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-black/10 bg-black/5 hover:bg-black/10 transition-all"
+            className="hidden items-center gap-2 border border-black/10 bg-black/5 px-3 py-1.5 transition-all hover:-translate-y-0.5 hover:bg-black/10 md:flex"
           >
             <LayoutPanelLeft className="w-3.5 h-3.5 text-purple-500" />
             <span className="text-[11px] font-bold tracking-tight opacity-70">SERVICES</span>
@@ -66,7 +54,7 @@ export function Header({ isAuditing, onToggleNetwork, documents, onSelectDoc }: 
           </button>
 
           {isServicesOpen && (
-            <div className="absolute top-full left-0 mt-2 w-64 rounded-xl border border-black/10 bg-white shadow-2xl z-50 p-1.5 animate-fade-in">
+            <div className="absolute top-full left-0 mt-2 w-64 border border-black/10 bg-white shadow-2xl z-50 p-1.5 animate-fade-in">
               <Link href="/dashboard/audit" className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-purple-50 transition-colors group">
                 <div className="w-8 h-8 rounded-md bg-purple-100 flex items-center justify-center text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-colors">
                   <Activity className="w-4 h-4" />
@@ -100,7 +88,7 @@ export function Header({ isAuditing, onToggleNetwork, documents, onSelectDoc }: 
       </div>
 
       {/* Center: Search */}
-      <div className="relative">
+      <div className="relative hidden md:block">
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg w-72 transition-all"
              style={{
                background: 'var(--bg-card)',
@@ -155,7 +143,7 @@ export function Header({ isAuditing, onToggleNetwork, documents, onSelectDoc }: 
         {/* Network Graph Toggle */}
         <button
           onClick={onToggleNetwork}
-          className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg transition-all hover:opacity-80"
+          className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 transition-all hover:-translate-y-0.5 hover:opacity-80"
           style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-card)' }}
         >
           <Network className="w-3.5 h-3.5" />
@@ -190,7 +178,7 @@ export function Header({ isAuditing, onToggleNetwork, documents, onSelectDoc }: 
         <Link
           href="/settings"
           id="settings-nav-btn"
-          className="relative flex items-center gap-2 px-2.5 py-1.5 rounded-lg transition-all hover:opacity-80"
+          className="relative flex items-center gap-2 px-2.5 py-1.5 transition-all hover:-translate-y-0.5 hover:opacity-80"
           style={{
             background: keysConfigured ? 'rgba(5,150,105,0.08)' : 'rgba(220,38,38,0.08)',
             border: keysConfigured ? '1px solid rgba(5,150,105,0.3)' : '1px solid rgba(220,38,38,0.3)',

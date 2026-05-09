@@ -8,6 +8,7 @@ import { RiskGauge } from './RiskGauge';
 import { FindingCard } from './FindingCard';
 import { CommitModal } from './CommitModal';
 import { ObligationTimeline } from './ObligationTimeline';
+import { AuditSkeleton } from './AuditSkeleton';
 
 interface LeftPaneProps {
   selectedDoc: string | null;
@@ -17,6 +18,7 @@ interface LeftPaneProps {
   onAuditComplete: (result: AuditResult) => void;
   onLocate: (annotation: Annotation) => void;
   onCommitChange?: (committed: boolean) => void;
+  isAuditRunning?: boolean;
   documents: string[];
   setDocuments: (docs: string[]) => void;
 }
@@ -24,7 +26,7 @@ interface LeftPaneProps {
 export function LeftPane({
   documents, setDocuments,
   selectedDoc, onSelectDoc, auditResult,
-  onAuditStart, onAuditComplete, onLocate, onCommitChange
+  onAuditStart, onAuditComplete, onLocate, onCommitChange, isAuditRunning = false
 }: LeftPaneProps) {
   const [isAuditing, setIsAuditing] = useState(false);
   const [showCommitModal, setShowCommitModal] = useState(false);
@@ -33,6 +35,7 @@ export function LeftPane({
   const [isIndexing, setIsIndexing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const analysisLoading = isAuditing || isAuditRunning;
 
   useEffect(() => {
     if (!selectedDoc) return;
@@ -179,15 +182,15 @@ export function LeftPane({
         {/* Run Audit Button */}
         <button
           onClick={handleRunAudit}
-          disabled={!selectedDoc || isAuditing || isIndexing}
-          className="w-full mt-3 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          disabled={!selectedDoc || analysisLoading || isIndexing}
+          className="w-full mt-3 flex items-center justify-center gap-2 py-2.5 text-sm font-semibold transition-all hover:-translate-y-0.5 disabled:translate-y-0 disabled:opacity-40 disabled:cursor-not-allowed"
           style={{
-            background: isAuditing || isIndexing ? 'var(--bg-card)' : 'var(--accent-primary)',
-            color: isAuditing || isIndexing ? 'var(--accent-primary)' : '#ffffff',
-            border: isAuditing || isIndexing ? '1px solid var(--accent-primary)' : 'none',
+            background: analysisLoading || isIndexing ? 'var(--bg-card)' : 'var(--accent-primary)',
+            color: analysisLoading || isIndexing ? 'var(--accent-primary)' : '#ffffff',
+            border: analysisLoading || isIndexing ? '1px solid var(--accent-primary)' : 'none',
           }}
         >
-          {isAuditing ? (
+          {analysisLoading ? (
             <>
               <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
               Running Pipeline...
@@ -208,7 +211,9 @@ export function LeftPane({
 
       {/* Scrollable Results Area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {auditResult ? (
+        {analysisLoading ? (
+          <AuditSkeleton />
+        ) : auditResult ? (
           <>
             {/* Success Box */}
             <div className="rounded-lg p-3 flex flex-col gap-1"
