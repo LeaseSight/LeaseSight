@@ -41,7 +41,7 @@ api.leasesights.tech {
 
     header Access-Control-Allow-Origin "https://www.leasesights.tech"
     header Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE, PATCH"
-    header Access-Control-Allow-Headers "Content-Type, Authorization, X-OpenAI-Key, X-Pinecone-Key"
+    header Access-Control-Allow-Headers "Content-Type, Authorization, X-OpenAI-Key, X-API-Key, x-api-key, X-Pinecone-Key, X-Azure-Key, X-Azure-Endpoint, X-User-ID, x-user-id"
     header Access-Control-Allow-Credentials "true"
 
     @options {

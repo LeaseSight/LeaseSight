@@ -84,7 +84,6 @@ function buildKeyHeaders(): Record<string, string> {
   const keys = getStoredKeys();
   if (keys.openai) {
     headers['X-OpenAI-Key'] = keys.openai;
-    headers['X-API-Key']    = keys.openai; // Universal fallback header
   }
   if (keys.pinecone)      headers['X-Pinecone-Key']    = keys.pinecone;
   if (keys.azureKey)      headers['X-Azure-Key']       = keys.azureKey;

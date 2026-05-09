@@ -3,8 +3,14 @@ import os, sys, json, sqlite3, uuid, hashlib, io, time
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, BASE_DIR)
 
+def clean_secret(value):
+    if not value:
+        return value
+    return value.strip().strip('"').strip("'")
+
 # 2. MASTER GEOBLOCK BYPASS
-os.environ["OPENAI_BASE_URL"] = "https://api.openai-proxy.com/v1"
+OPENAI_BASE_URL = clean_secret(os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_PROXY_URL")) or "https://api.openai-proxy.com/v1"
+os.environ["OPENAI_BASE_URL"] = OPENAI_BASE_URL
 
 from datetime import datetime
 from pathlib import Path
@@ -32,9 +38,20 @@ RAW_PDF_DIR = os.path.join(BASE_DIR, "data", "raw_pdfs")
 os.makedirs(RAW_PDF_DIR, exist_ok=True)
 
 async def get_api_keys(request: Request) -> AuthKeys:
-    openai_key = request.headers.get("X-OpenAI-Key") or os.getenv("OPENAI_API_KEY")
+    openai_key = (
+        request.headers.get("X-OpenAI-Key")
+        or request.headers.get("X-API-Key")
+        or os.getenv("OPENAI_API_KEY")
+    )
     pinecone_key = request.headers.get("X-Pinecone-Key") or os.getenv("PINECONE_API_KEY")
-    return AuthKeys(openai_key=openai_key, pinecone_key=pinecone_key)
+    azure_key = request.headers.get("X-Azure-Key") or os.getenv("AZURE_KEY")
+    azure_endpoint = request.headers.get("X-Azure-Endpoint") or os.getenv("AZURE_ENDPOINT")
+    return AuthKeys(
+        openai_key=clean_secret(openai_key),
+        pinecone_key=clean_secret(pinecone_key),
+        azure_key=clean_secret(azure_key),
+        azure_endpoint=clean_secret(azure_endpoint),
+    )
 
 app = FastAPI(title="LeaseSight Production API")
 
@@ -155,17 +172,29 @@ async def start_audit(request: dict, keys: AuthKeys = Depends(get_api_keys)):
 @app.post("/api/upload")
 async def start_migration(background_tasks: BackgroundTasks, files: List[UploadFile] = File(None, alias="file"), keys: AuthKeys = Depends(get_api_keys)):
     if not files: raise HTTPException(status_code=422, detail="No files")
-    task_id = str(uuid.uuid4())[:8]
-    file_names = [f.filename for f in files]
-    for file in files:
-        with open(os.path.join(RAW_PDF_DIR, file.filename), "wb") as f: f.write(await file.read())
+    if not keys.openai_key:
+        raise HTTPException(status_code=401, detail="OpenAI API key is missing. Add it in settings or configure OPENAI_API_KEY on the server.")
+    if not keys.pinecone_key:
+        raise HTTPException(status_code=401, detail="Pinecone API key is missing. Add it in settings or configure PINECONE_API_KEY on the server.")
 
-    openai_client = OpenAI(api_key=keys.openai_key, base_url=os.environ["OPENAI_BASE_URL"])
-    pc = Pinecone(api_key=keys.pinecone_key)
-    index = pc.Index("leasesight-index")
-    processor = UniversalProcessor(openai_client, index, None)
-    background_tasks.add_task(processor.process_batch, task_id, file_names)
-    return {"status": "success", "task_id": task_id, "files": file_names}
+    try:
+        task_id = str(uuid.uuid4())[:8]
+        file_names = [f.filename for f in files]
+        for file in files:
+            target = os.path.join(RAW_PDF_DIR, os.path.basename(file.filename))
+            with open(target, "wb") as f:
+                f.write(await file.read())
+
+        openai_client = OpenAI(api_key=keys.openai_key, base_url=os.environ["OPENAI_BASE_URL"])
+        pc = Pinecone(api_key=keys.pinecone_key)
+        index = pc.Index("leasesight-index")
+        processor = UniversalProcessor(openai_client, index, None)
+        background_tasks.add_task(processor.process_batch, task_id, file_names)
+        return {"status": "success", "task_id": task_id, "files": file_names}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Upload initialization failed: {e}")
 
 @app.get("/api/index-status/{filename:path}")
 async def get_index_status(filename: str):

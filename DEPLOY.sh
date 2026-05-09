@@ -26,7 +26,7 @@ api.leasesights.tech {
     # NOW set fresh CORS headers - single source of truth
     header Access-Control-Allow-Origin "https://www.leasesights.tech"
     header Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE, PATCH"
-    header Access-Control-Allow-Headers "Content-Type, Authorization, X-OpenAI-Key, X-Pinecone-Key"
+    header Access-Control-Allow-Headers "Content-Type, Authorization, X-OpenAI-Key, X-API-Key, x-api-key, X-Pinecone-Key, X-Azure-Key, X-Azure-Endpoint, X-User-ID, x-user-id"
     header Access-Control-Allow-Credentials "true"
     header Access-Control-Expose-Headers "Content-Type, Content-Disposition"
 
@@ -54,7 +54,7 @@ echo ""
 
 # Step 2: Update application code
 echo "[2/4] Pulling latest code from git..."
-cd /opt/leasesight
+cd /home/azureuser/LeaseSight
 git fetch origin main
 git reset --hard origin/main
 echo "  ✓ Code updated"
@@ -73,7 +73,7 @@ docker rm leasesight-api 2>/dev/null || true
 docker run -d \
   --name leasesight-api \
   -p 8080:8080 \
-  --env-file /opt/leasesight/.env \
+  --env-file /home/azureuser/LeaseSight/.env \
   --restart unless-stopped \
   leasesight-backend:latest
 echo "  ✓ Backend restarted"
