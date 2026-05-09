@@ -156,42 +156,47 @@ async def run_research_audit(request: ResearchAuditRequest, clients: dict = Depe
 async def start_audit(request: dict, clients: dict = Depends(get_clients)):
     try:
         file_name = request.get("file_name")
-        if not file_name: raise HTTPException(status_code=400, detail="file_name required")
+        if not file_name:
+            return {"error": "file_name is required", "status": 400}
         
-        print(f"[API] Starting audit for: {file_name}")
+        print(f"[API] Initializing audit for: {file_name}")
         report = run_full_audit(file_name, openai_client=clients['openai'], pinecone_index=clients['pinecone'])
         
         if not report:
-            return {"error": "Audit engine returned no data (None). Check server logs."}
+            return {"error": "Audit engine failed to return a response.", "status": 500}
         
         if "error" in report:
-            return {"error": report["error"]}
+            # If it's a 'not found' error, it's usually a 404/waiting state
+            return {"error": report["error"], "status": 404 if "not found" in report["error"].lower() else 500}
 
+        # Visual Grounding Mapping
         annotations = []
-        for finding in report.get("findings", []):
+        findings = report.get("findings", [])
+        for finding in findings:
             quote = finding.get("evidence_quote")
             if quote and quote != "Not Found":
                 try:
                     coords = find_coordinates(file_name, quote)
-                    if coords and "bounding_box" in coords and len(coords["bounding_box"]) >= 4:
-                        annotations.append({
-                            "page": int(coords['page']),
-                            "x": coords['bounding_box'][0]['x'],
-                            "y": coords['bounding_box'][0]['y'],
-                            "width": coords['bounding_box'][2]['x'] - coords['bounding_box'][0]['x'],
-                            "height": coords['bounding_box'][2]['y'] - coords['bounding_box'][0]['y'],
-                            "color": "#3b82f6"
-                        })
+                    if coords and "bounding_box" in coords:
+                        bbox = coords["bounding_box"]
+                        if len(bbox) >= 4:
+                            annotations.append({
+                                "page": int(coords.get('page', 1)),
+                                "x": bbox[0]['x'],
+                                "y": bbox[0]['y'],
+                                "width": bbox[2]['x'] - bbox[0]['x'],
+                                "height": bbox[2]['y'] - bbox[0]['y'],
+                                "color": "#3b82f6"
+                            })
                 except Exception as e:
-                    print(f"Annotation error for quote '{quote}': {e}")
-                    continue
+                    print(f"[GROUNDING] Warning: Mapping failed for quote: {e}")
 
         report["annotations"] = annotations
         return report
 
     except Exception as e:
-        print(f"CRITICAL API ERROR: {e}")
-        return {"error": f"Internal Server Error: {str(e)}", "trace": "Check server logs for full traceback"}
+        print(f"[CRITICAL] API Audit Crash: {str(e)}")
+        return {"error": f"Internal Server Error: {str(e)}", "status": 500}
 
 @app.post("/api/chat")
 async def chat(request: dict, clients: dict = Depends(get_clients)):
