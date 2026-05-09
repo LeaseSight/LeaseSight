@@ -7,7 +7,7 @@
  */
 import { AuditResult, ChatResponse, LocateResponse, GraphData, HealthStatus, CommitResult } from './types';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
 // ---------------------------------------------------------------------------
 // Global Auth Context (Set by AuthGate)
