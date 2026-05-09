@@ -180,7 +180,10 @@ def run_full_audit(target_file, openai_client=None, pinecone_index=None):
     """
     # --- Client Resolution (Dependency Injection with .env fallback) ---
     if openai_client is None:
-        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        openai_client = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            base_url=os.getenv("OPENAI_PROXY_URL") or "https://api.openai.com/v1"
+        )
     if pinecone_index is None:
         pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
         pinecone_index = pc.Index("leasesight-index")

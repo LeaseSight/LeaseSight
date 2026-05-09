@@ -8,7 +8,10 @@ from pinecone import Pinecone
 
 # 1. SETUP
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    base_url=os.getenv("OPENAI_PROXY_URL") or "https://api.openai.com/v1"
+)
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
 # Connect to your newly created index

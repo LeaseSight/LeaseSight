@@ -96,7 +96,10 @@ def commit_to_knowledge_base(file_name, source_path=None, dest_folder=None, vect
             # Query Pinecone to discover all vectors for this file
             # We use a dummy vector query with metadata filter
             from openai import OpenAI
-            oai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            oai = OpenAI(
+                api_key=os.getenv("OPENAI_API_KEY"),
+                base_url=os.getenv("OPENAI_PROXY_URL") or "https://api.openai.com/v1"
+            )
             emb = oai.embeddings.create(
                 input=["contract document"],
                 model="text-embedding-3-small"

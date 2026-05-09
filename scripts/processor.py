@@ -24,7 +24,10 @@ def process_new_pdf(pdf_path, file_name, openai_client=None, pinecone_index=None
             credential=AzureKeyCredential(os.getenv("AZURE_KEY"))
         )
     if openai_client is None:
-        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        openai_client = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            base_url=os.getenv("OPENAI_PROXY_URL") or "https://api.openai.com/v1"
+        )
     if pinecone_index is None:
         pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
         pinecone_index = pc.Index("leasesight-index")

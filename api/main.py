@@ -130,7 +130,8 @@ async def get_api_keys(request: Request) -> AuthKeys:
     )
 
 def get_clients(keys: AuthKeys = Depends(get_api_keys)):
-    openai_client = OpenAI(api_key=keys.openai_key)
+    openai_base_url = os.getenv("OPENAI_PROXY_URL") or "https://api.openai.com/v1"
+    openai_client = OpenAI(api_key=keys.openai_key, base_url=openai_base_url)
     pc = Pinecone(api_key=keys.pinecone_key)
     pinecone_index = pc.Index("leasesight-index")
     
@@ -182,7 +183,9 @@ async def start_migration(
     with open(target_path, "wb") as f:
         f.write(content)
 
-    background_tasks.add_task(process_new_pdf, str(target_path), task_id)
+    # Initialize UniversalProcessor with proxy-enabled clients
+    processor = UniversalProcessor(clients['openai'], clients['pinecone'], clients['azure'])
+    background_tasks.add_task(processor.process_batch, task_id, [file.filename])
 
     return {
         "status": "success",
