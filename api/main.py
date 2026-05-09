@@ -67,11 +67,15 @@ init_db()
 
 app = FastAPI(title="LeaseSight Production API", version="4.0")
 
-# CORS — allow all origins. Note: allow_credentials must be False with wildcard origins.
+# CORS — allow specific domains for production and local development.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=[
+        "https://www.leasesights.tech",
+        "https://leasesights.tech",
+        "http://localhost:3000"
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -130,7 +134,8 @@ async def get_api_keys(request: Request) -> AuthKeys:
     )
 
 def get_clients(keys: AuthKeys = Depends(get_api_keys)):
-    openai_base_url = os.getenv("OPENAI_PROXY_URL") or "https://api.openai.com/v1"
+    # Default to the proxy URL to bypass geoblocks
+    openai_base_url = os.getenv("OPENAI_PROXY_URL") or "https://api.openai-proxy.com/v1"
     openai_client = OpenAI(api_key=keys.openai_key, base_url=openai_base_url)
     pc = Pinecone(api_key=keys.pinecone_key)
     pinecone_index = pc.Index("leasesight-index")
