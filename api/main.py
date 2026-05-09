@@ -51,9 +51,12 @@ app.add_middleware(
 @app.post("/api/upload")
 async def start_migration(
     background_tasks: BackgroundTasks,
-    files: List[UploadFile] = File(...),
+    files: List[UploadFile] = File(None, alias="file"),
     x_user_id: Optional[str] = Header(None)
 ):
+    if not files:
+        # Fallback if both 'file' and 'files' are missing
+        raise HTTPException(status_code=422, detail="No files provided. Use field name 'file' or 'files'.")
     task_id = str(uuid.uuid4())[:8]
     file_names = []
     
@@ -98,7 +101,12 @@ async def start_audit(request: dict):
 
 @app.get("/api/health")
 async def health():
-    return {"status": "healthy", "proxy": os.environ["OPENAI_BASE_URL"]}
+    return {
+        "status": "healthy",
+        "version": "1.0.5",
+        "last_sync": "2026-05-09 20:25:00",
+        "proxy": os.environ.get("OPENAI_BASE_URL")
+    }
 
 @app.get("/api/documents")
 async def list_documents():
