@@ -132,12 +132,42 @@ def run_full_audit(target_file, openai_client=None, pinecone_index=None):
                 market_context = "\n".join([m['metadata'].get('text', '') for m in m_res['matches']])
         except: pass
 
-        # 3. Pipeline
-        miner_out = agent_miner(context, openai_client)
-        judge_out = agent_judge(miner_out, market_context, openai_client)
-        final_report = agent_clerk(miner_out, judge_out, openai_client)
+        # --- 1. MINER (with Retry) ---
+        miner_output = {}
+        for attempt in range(3):
+            try:
+                miner_output = agent_miner(context, openai_client)
+                break
+            except Exception as e:
+                if "429" in str(e):
+                    time.sleep(5 * (attempt + 1))
+                    continue
+                raise e
+
+        # --- 2. JUDGE (with Retry) ---
+        judge_output = {}
+        for attempt in range(3):
+            try:
+                judge_output = agent_judge(miner_output, market_context, openai_client)
+                break
+            except Exception as e:
+                if "429" in str(e):
+                    time.sleep(5 * (attempt + 1))
+                    continue
+                raise e
+
+        # --- 3. CLERK (with Retry) ---
+        final_report = {}
+        for attempt in range(3):
+            try:
+                final_report = agent_clerk(miner_output, judge_output, openai_client)
+                break
+            except Exception as e:
+                if "429" in str(e):
+                    time.sleep(5 * (attempt + 1))
+                    continue
+                raise e
 
         return final_report
-
     except Exception as e:
-        return {"error": f"Audit Pipeline Error: {str(e)}"}
+        return {"error": f"Audit Pipeline Failed: {str(e)}"}

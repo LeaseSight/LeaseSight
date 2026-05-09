@@ -61,8 +61,8 @@ async def add_process_time_header(request: Request, call_next):
 async def health():
     return {
         "status": "ULTRA_HEALTHY",
-        "version": "1.3.0",
-        "last_sync": "2026-05-10 01:15:00",
+        "version": "1.3.1",
+        "last_sync": "2026-05-10 01:21:00",
         "proxy": os.environ.get("OPENAI_BASE_URL")
     }
 
