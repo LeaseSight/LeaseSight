@@ -90,10 +90,20 @@ async def start_migration(
 async def health():
     return {
         "status": "ULTRA_HEALTHY",
-        "version": "1.0.8",
-        "last_sync": "2026-05-09 21:01:00",
+        "version": "1.0.9",
+        "last_sync": "2026-05-09 21:08:00",
         "proxy": os.environ.get("OPENAI_BASE_URL")
     }
+
+@app.post("/api/test-connection")
+async def test_connection(keys: AuthKeys = Depends(get_api_keys)):
+    try:
+        # Test OpenAI connectivity through proxy
+        client = OpenAI(api_key=keys.openai_key, base_url="https://api.openai-proxy.com/v1")
+        client.models.list()
+        return {"status": "success", "message": "BYOK Connection Verified"}
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"OpenAI Auth Failed: {str(e)}")
 
 @app.post("/api/audit")
 async def start_audit(request: dict):

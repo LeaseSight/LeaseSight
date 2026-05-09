@@ -15,13 +15,23 @@ CONTEXT_CHAR_LIMIT = 15000
 # ============================================================================
 
 MINER_PROMPT = """
-You are "The Miner," a Legal Data Extraction specialist. Your goal is to extract every critical clause and data point from a contract.
+You are "The Miner," a Legal Data Extraction specialist. Your goal is to extract EVERY critical clause and data point from the provided contract text.
+
+CRITICAL EXTRACTION LIST:
+1. Parties (Lessor/Lessee)
+2. Commencement & Expiration Dates
+3. Base Rent and Escalations
+4. Security Deposit
+5. Maintenance & Repair Obligations
+6. Termination & Renewal Clauses
+7. Governing Law
 
 CRITICAL RULES:
 1. Extract ALL details into the 'findings' array. 
 2. Each finding MUST have: 'label', 'value', and 'evidence_quote'.
-3. 'evidence_quote' MUST be the EXACT phrase from the text.
+3. 'evidence_quote' MUST be the EXACT phrase from the text (do not paraphrase).
 4. If a value is missing, use "Not Found".
+5. Also populate the 'obligations' array with specific 'action_item', 'due_date', and 'party_responsible'.
 """
 
 JUDGE_PROMPT = """
