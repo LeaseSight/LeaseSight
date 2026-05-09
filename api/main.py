@@ -39,15 +39,7 @@ async def get_api_keys(request: Request) -> AuthKeys:
 
 app = FastAPI(title="LeaseSight Production API")
 
-# --- 3. HARDENED CORS MIDDLEWARE (SUPER HEADER) ---
-@app.middleware("http")
-async def add_cors_headers(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-OpenAI-Key, X-Pinecone-Key, X-User-Id"
-    return response
-
+# --- 3. BULLETPROOF CORS MIDDLEWARE ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -57,12 +49,20 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    return response
+
 @app.get("/api/health")
 async def health():
     return {
         "status": "ULTRA_HEALTHY",
-        "version": "1.2.3",
-        "last_sync": "2026-05-09 21:48:00",
+        "version": "1.3.0",
+        "last_sync": "2026-05-10 01:15:00",
         "proxy": os.environ.get("OPENAI_BASE_URL")
     }
 
@@ -87,7 +87,7 @@ async def commit_audit(request: Request):
         c.execute("UPDATE migration_batches SET status = 'COMPLETED' WHERE id = ?", (task_id,))
         conn.commit()
         conn.close()
-        return {"status": "success"}
+        return {"status": "success", "message": "Batch Approved"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -126,12 +126,11 @@ async def start_audit(request: dict, keys: AuthKeys = Depends(get_api_keys)):
         
         report.setdefault("findings", [])
         report.setdefault("obligations", [])
-        report.setdefault("warnings", [])
         
-        # --- HARDENED MARKING LOGIC ---
+        # --- FIX: EXHAUSTIVE MARKING LOGIC ---
         annotations = []
-        all_items = report.get("findings", []) + report.get("obligations", [])
-        for item in all_items:
+        all_findings = report.get("findings", []) + report.get("obligations", [])
+        for item in all_findings:
             quote = item.get("evidence_quote")
             if quote and len(quote) > 15 and quote != "Not Found":
                 coords = find_coordinates(file_name, quote)
