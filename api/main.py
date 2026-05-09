@@ -53,6 +53,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"]
 )
 
 @app.post("/api/upload")
@@ -96,12 +97,12 @@ async def start_migration(
 async def health():
     return {
         "status": "ULTRA_HEALTHY",
-        "version": "1.1.1",
-        "last_sync": "2026-05-09 21:16:00",
+        "version": "1.1.2",
+        "last_sync": "2026-05-09 21:21:00",
         "proxy": os.environ.get("OPENAI_BASE_URL")
     }
 
-@app.post("/api/test-connection")
+@app.api_route("/api/test-connection", methods=["GET", "POST", "OPTIONS"])
 async def test_connection(keys: AuthKeys = Depends(get_api_keys)):
     try:
         # Test OpenAI connectivity through proxy
@@ -109,7 +110,7 @@ async def test_connection(keys: AuthKeys = Depends(get_api_keys)):
         client.models.list()
         return {"status": "success", "message": "BYOK Connection Verified"}
     except Exception as e:
-        raise HTTPException(status_code=401, detail=f"OpenAI Auth Failed: {str(e)}")
+        return {"status": "error", "message": str(e)}
 
 @app.post("/api/audit")
 async def start_audit(request: dict):
