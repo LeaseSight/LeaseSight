@@ -1,44 +1,41 @@
 api.leasesights.tech {
-    # CORS headers at proxy level — handles all browsers
-    header {
-        Access-Control-Allow-Origin "https://www.leasesights.tech"
-        Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE"
-        Access-Control-Allow-Headers "Content-Type, Authorization, X-OpenAI-Key, X-Pinecone-Key"
-        Access-Control-Expose-Headers "*"
-        Access-Control-Allow-Credentials "true"
+    # STRIP all incoming CORS headers from backend (to remove wildcard)
+    # Then set ONLY the correct ones
+    reverse_proxy localhost:8080 {
+        header_down -Access-Control-Allow-Origin
+        header_down -Access-Control-Allow-Methods
+        header_down -Access-Control-Allow-Headers
+        header_down -Access-Control-Allow-Credentials
+        header_down -Access-Control-Expose-Headers
     }
 
-    # Handle preflight OPTIONS directly at proxy
+    # NOW set fresh CORS headers - single source of truth
+    header Access-Control-Allow-Origin "https://www.leasesights.tech"
+    header Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE, PATCH"
+    header Access-Control-Allow-Headers "Content-Type, Authorization, X-OpenAI-Key, X-Pinecone-Key"
+    header Access-Control-Allow-Credentials "true"
+    header Access-Control-Expose-Headers "Content-Type, Content-Disposition"
+
+    # Handle preflight OPTIONS directly - 204 No Content
     @options {
         method OPTIONS
     }
     respond @options 204
-
-    # Reverse proxy to backend container
-    reverse_proxy localhost:8080
 }
 
 www.leasesights.tech {
     root * /var/www/leasesight-ui
     file_server
-
-    # SPA routing: serve index.html for non-file routes
     try_files {path} /index.html
 }
 
-# Development (local machine)
 localhost:3000 {
-    file_server {
-        root /path/to/leasesight-ui/dist
+    header Access-Control-Allow-Origin "*"
+    header Access-Control-Allow-Methods "*"
+    header Access-Control-Allow-Headers "*"
+    reverse_proxy localhost:8080 {
+        header_down -Access-Control-Allow-Origin
+        header_down -Access-Control-Allow-Methods
+        header_down -Access-Control-Allow-Headers
     }
-    try_files {path} /index.html
-}
-
-localhost:8000 {
-    header {
-        Access-Control-Allow-Origin "*"
-        Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE"
-        Access-Control-Allow-Headers "*"
-    }
-    reverse_proxy localhost:8080
 }

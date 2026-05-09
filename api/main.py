@@ -38,7 +38,23 @@ async def get_api_keys(request: Request) -> AuthKeys:
 
 app = FastAPI(title="LeaseSight Production API")
 
-# CORS is handled by Caddy reverse proxy, not here
+# CORS is handled ONLY by Caddy reverse proxy
+# This middleware ensures FastAPI never sends CORS headers (strip them if they exist)
+@app.middleware("http")
+async def remove_cors_headers(request: Request, call_next):
+    response = await call_next(request)
+    # Strip all CORS headers from response - Caddy will add the correct ones
+    headers_to_remove = [
+        "Access-Control-Allow-Origin",
+        "Access-Control-Allow-Methods",
+        "Access-Control-Allow-Headers",
+        "Access-Control-Allow-Credentials",
+        "Access-Control-Expose-Headers",
+        "Access-Control-Max-Age"
+    ]
+    for header in headers_to_remove:
+        response.headers.pop(header, None)
+    return response
 
 @app.get("/api/health")
 async def health():
