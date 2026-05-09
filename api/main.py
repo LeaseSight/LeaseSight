@@ -104,10 +104,21 @@ async def start_audit(request: dict):
 async def health():
     return {
         "status": "ULTRA_HEALTHY",
-        "version": "1.0.6",
-        "last_sync": "2026-05-09 20:35:00",
+        "version": "1.0.7",
+        "last_sync": "2026-05-09 20:55:00",
         "proxy": os.environ.get("OPENAI_BASE_URL")
     }
+
+@app.get("/api/index-status/{filename:path}")
+async def get_index_status(filename: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT status FROM migration_results WHERE file_name = ? LIMIT 1", (filename,))
+    result = c.fetchone()
+    conn.close()
+    if result:
+        return {"status": "COMPLETED", "indexed": True}
+    return {"status": "PENDING", "indexed": False}
 
 @app.get("/api/ping")
 async def ping():
