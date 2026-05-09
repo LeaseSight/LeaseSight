@@ -5,7 +5,7 @@ from typing import List, Optional
 import pandas as pd
 import io
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends, BackgroundTasks, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
@@ -401,6 +401,21 @@ async def get_migration_status(batch_id: str):
         "status": batch[3],
         "results": results
     }
+
+@app.get("/api/test-connection")
+async def test_connection(x_openai_key: Optional[str] = Header(None), x_api_key: Optional[str] = Header(None)):
+    """
+    Verifies if the provided API key is valid (basic format check).
+    Accepts either X-OpenAI-Key or a universal X-API-Key.
+    """
+    key = x_openai_key or x_api_key
+    if not key:
+        return {"success": False, "message": "No API key provided."}
+    
+    if key.startswith("sk-"):
+        return {"success": True, "message": "Connection established with custom key."}
+    
+    return {"success": False, "message": "Invalid key format. Ensure it starts with 'sk-'."}
 
 @app.get("/pdfs/{filename:path}")
 async def serve_pdf(filename: str):

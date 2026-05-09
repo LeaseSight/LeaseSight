@@ -80,7 +80,10 @@ function buildKeyHeaders(): Record<string, string> {
   // Brain Switch Logic
   if (globalUserTier === 'BYOK') {
     const keys = getStoredKeys();
-    if (keys.openai)        headers['X-OpenAI-Key']      = keys.openai;
+    if (keys.openai) {
+      headers['X-OpenAI-Key'] = keys.openai;
+      headers['X-API-Key']    = keys.openai; // Universal fallback
+    }
     if (keys.pinecone)      headers['X-Pinecone-Key']    = keys.pinecone;
     if (keys.azureKey)      headers['X-Azure-Key']       = keys.azureKey;
     if (keys.azureEndpoint) headers['X-Azure-Endpoint']  = keys.azureEndpoint;
@@ -127,6 +130,8 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
 // ---------------------------------------------------------------------------
 
 export const api = {
+  testConnection: () => fetchJSON<{ success: boolean; message: string }>('/api/test-connection'),
+
   health: () => fetchJSON<HealthStatus>('/api/health'),
 
   documents: () => fetchJSON<{ documents: string[]; count: number }>('/api/documents'),
