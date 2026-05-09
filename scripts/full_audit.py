@@ -206,8 +206,8 @@ def run_full_audit(target_file, openai_client=None, pinecone_index=None):
         )
 
         if not results['matches']:
-            print("No matching segments found in database.")
-            return None
+            print(f"No matching segments found for: {target_file}")
+            return {"error": "Document not found in database. Please ensure it has been uploaded and wait a few moments for indexing to complete."}
 
         sorted_matches = sorted(
             results['matches'],
@@ -219,7 +219,7 @@ def run_full_audit(target_file, openai_client=None, pinecone_index=None):
         ])
     except Exception as e:
         print(f"Pinecone Retrieval Error: {e}")
-        return None
+        return {"error": f"Database retrieval failed: {str(e)}"}
 
     # 2. Market Context from Pinecone
     try:

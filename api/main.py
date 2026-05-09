@@ -155,14 +155,28 @@ async def start_audit(request: dict, clients: dict = Depends(get_clients)):
     file_name = request.get("file_name")
     if not file_name: raise HTTPException(status_code=400, detail="file_name required")
     report = run_full_audit(file_name, openai_client=clients['openai'], pinecone_index=clients['pinecone'])
-    if not report: raise HTTPException(status_code=500, detail="Audit failed")
+    
+    if not report:
+        raise HTTPException(status_code=500, detail="Audit engine returned no data.")
+    
+    if "error" in report:
+        # Return a 404 if the document is missing from the DB, otherwise 500
+        status_code = 404 if "not found" in report["error"].lower() else 500
+        raise HTTPException(status_code=status_code, detail=report["error"])
     annotations = []
     for finding in report.get("findings", []):
         quote = finding.get("evidence_quote")
         if quote and quote != "Not Found":
             coords = find_coordinates(file_name, quote)
-            if coords:
-                annotations.append({"page": int(coords['page']), "x": coords['bounding_box'][0]['x'], "y": coords['bounding_box'][0]['y'], "width": coords['bounding_box'][2]['x'] - coords['bounding_box'][0]['x'], "height": coords['bounding_box'][2]['y'] - coords['bounding_box'][0]['y'], "color": "#3b82f6"})
+            if coords and "bounding_box" in coords and len(coords["bounding_box"]) >= 4:
+                annotations.append({
+                    "page": int(coords['page']),
+                    "x": coords['bounding_box'][0]['x'],
+                    "y": coords['bounding_box'][0]['y'],
+                    "width": coords['bounding_box'][2]['x'] - coords['bounding_box'][0]['x'],
+                    "height": coords['bounding_box'][2]['y'] - coords['bounding_box'][0]['y'],
+                    "color": "#3b82f6"
+                })
     report["annotations"] = annotations
     return report
 
