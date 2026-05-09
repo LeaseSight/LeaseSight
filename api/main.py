@@ -16,7 +16,8 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from openai import OpenAI
 from pinecone import Pinecone
 
-# Local Imports (Using absolute-style paths for Docker stability)
+# DEPLOYMENT MARKER: 2026-05-09 20:45:00
+# 1. PATH FIX: Ensure Docker can see the project root
 from api.schemas import EntityStatus, MigrationEntity, AuthKeys
 from api.processor import UniversalProcessor
 from scripts.full_audit import run_full_audit
