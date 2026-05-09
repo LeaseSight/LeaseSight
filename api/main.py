@@ -53,7 +53,10 @@ async def remove_cors_headers(request: Request, call_next):
         "Access-Control-Max-Age"
     ]
     for header in headers_to_remove:
-        response.headers.pop(header, None)
+        try:
+            del response.headers[header]
+        except KeyError:
+            pass
     return response
 
 @app.get("/api/health")
