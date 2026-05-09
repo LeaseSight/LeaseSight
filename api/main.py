@@ -169,35 +169,35 @@ async def verify_auth(request: Request):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/upload")
-async def start_migration(
-    background_tasks: BackgroundTasks, 
-    files: List[UploadFile] = File(...), 
+async def upload_document(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),  # Single file, named 'file' — matches frontend FormData
     clients: dict = Depends(get_clients),
     user_id: str = Depends(verify_auth)
 ):
     task_id = str(uuid.uuid4())[:8]
-    file_names = []
-    
-    for file in files:
-        target_path = RAW_PDF_DIR / file.filename
-        content = await file.read()
-        with open(target_path, "wb") as f:
-            f.write(content)
-        file_names.append(file.filename)
-    
-    # Initialize batch in DB
+
+    # Save file to disk
+    target_path = RAW_PDF_DIR / file.filename
+    content = await file.read()
+    with open(target_path, "wb") as f:
+        f.write(content)
+
+    # Initialize a single-file batch in DB
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT INTO migration_batches (id, timestamp, user_hash, total_files, processed_files, status) VALUES (?,?,?,?,?,?)",
-              (task_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id, len(file_names), 0, 'PENDING'))
+    c.execute(
+        "INSERT INTO migration_batches (id, timestamp, user_hash, total_files, processed_files, status) VALUES (?,?,?,?,?,?)",
+        (task_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id, 1, 0, 'PENDING')
+    )
     conn.commit()
     conn.close()
-    
-    # Trigger background task
+
+    # Trigger background processing
     processor = UniversalProcessor(clients['openai'], clients['pinecone'], clients['azure'])
-    background_tasks.add_task(processor.process_batch, task_id, file_names)
-    
-    return {"task_id": task_id, "status": "QUEUED", "file_count": len(file_names)}
+    background_tasks.add_task(processor.process_batch, task_id, [file.filename])
+
+    return {"task_id": task_id, "status": "QUEUED", "file_count": 1, "file_name": file.filename}
 
 @app.get("/api/migrate/review/{task_id}")
 async def get_migration_review(task_id: str):
