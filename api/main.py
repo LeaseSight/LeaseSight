@@ -80,26 +80,30 @@ def get_clients(keys: AuthKeys = Depends(get_api_keys)):
 @app.post("/api/upload")
 async def start_migration(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
+    files: List[UploadFile] = File(...),
     clients: dict = Depends(get_clients),
     x_user_id: Optional[str] = Header(None)
 ):
     task_id = str(uuid.uuid4())[:8]
-    target_path = RAW_PDF_DIR / file.filename
-    content = await file.read()
-    with open(target_path, "wb") as f:
-        f.write(content)
+    file_names = []
+    
+    for file in files:
+        target_path = RAW_PDF_DIR / file.filename
+        content = await file.read()
+        with open(target_path, "wb") as f:
+            f.write(content)
+        file_names.append(file.filename)
 
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("INSERT INTO migration_batches (id, timestamp, user_hash, total_files, processed_files, status) VALUES (?,?,?,?,?,?)",
-              (task_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), x_user_id, 1, 0, 'PENDING'))
+              (task_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), x_user_id, len(file_names), 0, 'PENDING'))
     conn.commit()
     conn.close()
 
     processor = UniversalProcessor(clients['openai'], clients['pinecone'], None)
-    background_tasks.add_task(processor.process_batch, task_id, [file.filename])
-    return {"status": "success", "task_id": task_id, "filename": file.filename}
+    background_tasks.add_task(processor.process_batch, task_id, file_names)
+    return {"status": "success", "task_id": task_id, "files": file_names}
 
 @app.post("/api/audit")
 async def start_audit(request: dict, clients: dict = Depends(get_clients)):
