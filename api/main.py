@@ -38,6 +38,11 @@ def init_db():
     conn.commit()
     conn.close()
 
+async def get_api_keys(request: Request) -> AuthKeys:
+    openai_key = request.headers.get("X-OpenAI-Key") or os.getenv("OPENAI_API_KEY")
+    pinecone_key = request.headers.get("X-Pinecone-Key") or os.getenv("PINECONE_API_KEY")
+    return AuthKeys(openai_key=openai_key, pinecone_key=pinecone_key)
+
 init_db()
 
 app = FastAPI(title="LeaseSight Production API")
@@ -91,8 +96,8 @@ async def start_migration(
 async def health():
     return {
         "status": "ULTRA_HEALTHY",
-        "version": "1.1.0",
-        "last_sync": "2026-05-09 21:15:00",
+        "version": "1.1.1",
+        "last_sync": "2026-05-09 21:16:00",
         "proxy": os.environ.get("OPENAI_BASE_URL")
     }
 
