@@ -22,7 +22,7 @@ api.leasesights.tech {
 
     header Access-Control-Allow-Origin "https://www.leasesights.tech"
     header Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE, PATCH"
-    header Access-Control-Allow-Headers "Content-Type, Authorization, X-OpenAI-Key, X-Pinecone-Key"
+    header Access-Control-Allow-Headers "Content-Type, Authorization, X-OpenAI-Key, X-Pinecone-Key, X-User-ID, x-user-id"
     header Access-Control-Allow-Credentials "true"
     header Access-Control-Expose-Headers "Content-Type, Content-Disposition"
 
