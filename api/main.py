@@ -76,6 +76,7 @@ async def get_api_keys(request: Request) -> AuthKeys:
 def get_clients(keys: AuthKeys = Depends(get_api_keys)):
     # 2. PERMANENT GEOBLOCK FIX (PROXY)
     openai_base_url = os.getenv("OPENAI_PROXY_URL") or "https://api.openai-proxy.com/v1"
+    os.environ["OPENAI_BASE_URL"] = openai_base_url # Global safety net
     openai_client = OpenAI(api_key=keys.openai_key, base_url=openai_base_url)
     pc = Pinecone(api_key=keys.pinecone_key)
     pinecone_index = pc.Index("leasesight-index")

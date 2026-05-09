@@ -20,6 +20,7 @@ class UniversalProcessor:
         
         # PERMANENT GEOBLOCK FIX (Enforced in background tasks)
         proxy_url = os.getenv("OPENAI_PROXY_URL") or "https://api.openai-proxy.com/v1"
+        os.environ["OPENAI_BASE_URL"] = proxy_url # Global safety net
         self.openai.base_url = proxy_url
 
     async def process_batch(self, task_id: str, files: List[str]):
@@ -74,6 +75,7 @@ class ResearchAuditor:
         self.pinecone = pinecone_index
         # Enforce proxy
         proxy_url = os.getenv("OPENAI_PROXY_URL") or "https://api.openai-proxy.com/v1"
+        os.environ["OPENAI_BASE_URL"] = proxy_url # Global safety net
         self.openai.base_url = proxy_url
 
     async def audit_paper(self, file_name: str) -> Dict[str, Any]:
