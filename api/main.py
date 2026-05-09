@@ -153,15 +153,15 @@ async def start_audit(request: dict, keys: AuthKeys = Depends(get_api_keys)):
         return {"error": str(e), "findings": [], "obligations": []}
 
 @app.post("/api/upload")
-async def start_migration(background_tasks: BackgroundTasks, files: List[UploadFile] = File(None, alias="file")):
+async def start_migration(background_tasks: BackgroundTasks, files: List[UploadFile] = File(None, alias="file"), keys: AuthKeys = Depends(get_api_keys)):
     if not files: raise HTTPException(status_code=422, detail="No files")
     task_id = str(uuid.uuid4())[:8]
     file_names = [f.filename for f in files]
     for file in files:
         with open(os.path.join(RAW_PDF_DIR, file.filename), "wb") as f: f.write(await file.read())
-    
-    openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.environ["OPENAI_BASE_URL"])
-    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+
+    openai_client = OpenAI(api_key=keys.openai_key, base_url=os.environ["OPENAI_BASE_URL"])
+    pc = Pinecone(api_key=keys.pinecone_key)
     index = pc.Index("leasesight-index")
     processor = UniversalProcessor(openai_client, index, None)
     background_tasks.add_task(processor.process_batch, task_id, file_names)
