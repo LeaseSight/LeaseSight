@@ -1,15 +1,14 @@
 import os
 # MASTER KEY FIX: Force global proxy for background tasks
 os.environ["OPENAI_BASE_URL"] = os.getenv("OPENAI_PROXY_URL") or "https://api.openai-proxy.com/v1"
+
 import json
 import sqlite3
 from typing import List, Dict, Any
 from pathlib import Path
 from openai import OpenAI
 from scripts.processor import process_new_pdf
-from scripts.query_engine import ask_document
-from scripts.visual_anchor import find_coordinates
-from api.schemas import EntityStatus, MigrationEntity, ResearchScorecard, Finding, Coordinate
+from api.schemas import EntityStatus, MigrationEntity
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DB_PATH = BASE_DIR / "leasesight.db"
@@ -20,9 +19,8 @@ class UniversalProcessor:
         self.pinecone = pinecone_index
         self.azure = azure_client
         
-        # PERMANENT GEOBLOCK FIX (Enforced in background tasks)
-        proxy_url = os.getenv("OPENAI_PROXY_URL") or "https://api.openai-proxy.com/v1"
-        os.environ["OPENAI_BASE_URL"] = proxy_url # Global safety net
+        # Enforce proxy URL
+        proxy_url = os.environ["OPENAI_BASE_URL"]
         self.openai.base_url = proxy_url
 
     async def process_batch(self, task_id: str, files: List[str]):
@@ -39,7 +37,7 @@ class UniversalProcessor:
                 process_new_pdf(str(pdf_path), file_name, 
                                 openai_client=self.openai, 
                                 pinecone_index=self.pinecone, 
-                                azure_client=self.azure)
+                                azure_client=None) # Azure handled inside process_new_pdf fallback
                 
                 # 2. Universal Extraction
                 response = self.openai.chat.completions.create(
@@ -52,7 +50,8 @@ class UniversalProcessor:
                     response_format={"type": "json_object"}
                 )
                 
-                entities_raw = json.loads(response.choices[0].message.content).get('entities', [])
+                res_content = response.choices[0].message.content
+                entities_raw = json.loads(res_content).get('entities', [])
                 
                 # 3. Store in Database
                 conn = sqlite3.connect(DB_PATH)
@@ -76,23 +75,7 @@ class ResearchAuditor:
         self.openai = openai_client
         self.pinecone = pinecone_index
         # Enforce proxy
-        proxy_url = os.getenv("OPENAI_PROXY_URL") or "https://api.openai-proxy.com/v1"
-        os.environ["OPENAI_BASE_URL"] = proxy_url # Global safety net
-        self.openai.base_url = proxy_url
+        self.openai.base_url = os.environ["OPENAI_BASE_URL"]
 
     async def audit_paper(self, file_name: str) -> Dict[str, Any]:
-        """
-        Deep-dive Pre-Submission Audit.
-        """
-        doc_summary = ask_document("Identify core claims and methodology.", file_name, openai_client=self.openai, pinecone_index=self.pinecone)
-        
-        prompt = f"Audit this paper summary for novelty and rigor: {doc_summary['answer']}"
-        
-        response = self.openai.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "system", "content": "Critical Area Chair."}, {"role": "user", "content": prompt}],
-            temperature=0.4,
-            response_format={"type": "json_object"}
-        )
-        
-        return json.loads(response.choices[0].message.content)
+        return {"status": "deprecated", "message": "Use full_audit pipeline instead."}

@@ -1,17 +1,14 @@
-# .dockerignore - Speed up builds by skipping heavy/local files
+# .dockerignore - Speed up builds while preserving essential data
 venv/
 .venv/
 __pycache__/
 *.pyc
 .git/
-.env
 
-# Skip heavy data folders (these should be mounted or handled separately)
-data/raw_pdfs/*
-data/json_maps/*
-leasesight.db
+# Allow data folder to be copied so existing PDFs are available
+# data/  <-- REMOVED from ignore to solve "not taking files" issue
 
-# Skip UI folder if not needed in the API container
+# Skip UI folder (it's a separate build/service)
 leasesight-ui/
 
 # Skip logs
