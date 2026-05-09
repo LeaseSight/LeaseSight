@@ -169,11 +169,11 @@ async def verify_auth(request: Request):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/upload")
-async def upload_document(
+async def start_migration(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),  # Single file, named 'file' — matches frontend FormData
+    file: UploadFile = File(...),
     clients: dict = Depends(get_clients),
-    user_id: Optional[str] = None  # Temporarily optional — bypasses auth for upload testing
+    user_id: Optional[str] = Header(None, alias="X-User-Id")
 ):
     task_id = str(uuid.uuid4())[:8]
 
@@ -183,21 +183,15 @@ async def upload_document(
     with open(target_path, "wb") as f:
         f.write(content)
 
-    # Initialize a single-file batch in DB
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute(
-        "INSERT INTO migration_batches (id, timestamp, user_hash, total_files, processed_files, status) VALUES (?,?,?,?,?,?)",
-        (task_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id, 1, 0, 'PENDING')
-    )
-    conn.commit()
-    conn.close()
+    # Index the document in the background
+    background_tasks.add_task(process_new_pdf, str(target_path), file.filename)
 
-    # Trigger background processing
-    processor = UniversalProcessor(clients['openai'], clients['pinecone'], clients['azure'])
-    background_tasks.add_task(processor.process_batch, task_id, [file.filename])
-
-    return {"task_id": task_id, "status": "QUEUED", "file_count": 1, "file_name": file.filename}
+    return {
+        "status": "success",
+        "task_id": task_id,
+        "file_name": file.filename,
+        "filename": file.filename,   # extra alias for frontend compatibility
+    }
 
 @app.get("/api/migrate/review/{task_id}")
 async def get_migration_review(task_id: str):
