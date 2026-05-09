@@ -173,24 +173,21 @@ async def start_migration(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     clients: dict = Depends(get_clients),
-    user_id: Optional[str] = Header(None, alias="X-User-Id")
+    x_user_id: Optional[str] = Header(None)
 ):
     task_id = str(uuid.uuid4())[:8]
 
-    # Save file to disk
     target_path = RAW_PDF_DIR / file.filename
     content = await file.read()
     with open(target_path, "wb") as f:
         f.write(content)
 
-    # Index the document in the background
-    background_tasks.add_task(process_new_pdf, str(target_path), file.filename)
+    background_tasks.add_task(process_new_pdf, str(target_path), task_id)
 
     return {
         "status": "success",
         "task_id": task_id,
-        "file_name": file.filename,
-        "filename": file.filename,   # extra alias for frontend compatibility
+        "filename": file.filename
     }
 
 @app.get("/api/migrate/review/{task_id}")
