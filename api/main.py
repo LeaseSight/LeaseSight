@@ -154,33 +154,44 @@ async def run_research_audit(request: ResearchAuditRequest, clients: dict = Depe
 
 @app.post("/api/audit")
 async def start_audit(request: dict, clients: dict = Depends(get_clients)):
-    file_name = request.get("file_name")
-    if not file_name: raise HTTPException(status_code=400, detail="file_name required")
-    report = run_full_audit(file_name, openai_client=clients['openai'], pinecone_index=clients['pinecone'])
-    
-    if not report:
-        raise HTTPException(status_code=500, detail="Audit engine returned no data.")
-    
-    if "error" in report:
-        # Return a 404 if the document is missing from the DB, otherwise 500
-        status_code = 404 if "not found" in report["error"].lower() else 500
-        raise HTTPException(status_code=status_code, detail=report["error"])
-    annotations = []
-    for finding in report.get("findings", []):
-        quote = finding.get("evidence_quote")
-        if quote and quote != "Not Found":
-            coords = find_coordinates(file_name, quote)
-            if coords and "bounding_box" in coords and len(coords["bounding_box"]) >= 4:
-                annotations.append({
-                    "page": int(coords['page']),
-                    "x": coords['bounding_box'][0]['x'],
-                    "y": coords['bounding_box'][0]['y'],
-                    "width": coords['bounding_box'][2]['x'] - coords['bounding_box'][0]['x'],
-                    "height": coords['bounding_box'][2]['y'] - coords['bounding_box'][0]['y'],
-                    "color": "#3b82f6"
-                })
-    report["annotations"] = annotations
-    return report
+    try:
+        file_name = request.get("file_name")
+        if not file_name: raise HTTPException(status_code=400, detail="file_name required")
+        
+        print(f"[API] Starting audit for: {file_name}")
+        report = run_full_audit(file_name, openai_client=clients['openai'], pinecone_index=clients['pinecone'])
+        
+        if not report:
+            return {"error": "Audit engine returned no data (None). Check server logs."}
+        
+        if "error" in report:
+            return {"error": report["error"]}
+
+        annotations = []
+        for finding in report.get("findings", []):
+            quote = finding.get("evidence_quote")
+            if quote and quote != "Not Found":
+                try:
+                    coords = find_coordinates(file_name, quote)
+                    if coords and "bounding_box" in coords and len(coords["bounding_box"]) >= 4:
+                        annotations.append({
+                            "page": int(coords['page']),
+                            "x": coords['bounding_box'][0]['x'],
+                            "y": coords['bounding_box'][0]['y'],
+                            "width": coords['bounding_box'][2]['x'] - coords['bounding_box'][0]['x'],
+                            "height": coords['bounding_box'][2]['y'] - coords['bounding_box'][0]['y'],
+                            "color": "#3b82f6"
+                        })
+                except Exception as e:
+                    print(f"Annotation error for quote '{quote}': {e}")
+                    continue
+
+        report["annotations"] = annotations
+        return report
+
+    except Exception as e:
+        print(f"CRITICAL API ERROR: {e}")
+        return {"error": f"Internal Server Error: {str(e)}", "trace": "Check server logs for full traceback"}
 
 @app.post("/api/chat")
 async def chat(request: dict, clients: dict = Depends(get_clients)):

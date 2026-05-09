@@ -174,85 +174,81 @@ def agent_clerk(miner_output, judge_output, openai_client):
 def run_full_audit(target_file, openai_client=None, pinecone_index=None):
     """
     Multi-Agent Audit Pipeline: Miner → Judge → Clerk.
-
-    Clients are injected by the API layer (from request headers).
-    Falls back to .env values if not provided, for local/dev use.
     """
-    # --- Client Resolution (Dependency Injection with .env fallback) ---
-    if openai_client is None:
-        openai_client = OpenAI(
-            api_key=os.getenv("OPENAI_API_KEY"),
-            base_url=os.getenv("OPENAI_PROXY_URL") or "https://api.openai.com/v1"
-        )
-    if pinecone_index is None:
-        pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-        pinecone_index = pc.Index("leasesight-index")
-
-    print(f"--- STARTING MULTI-AGENT AUDIT FOR: {target_file} ---")
-
-    # 1. Broad Retrieval from Pinecone
     try:
-        res = openai_client.embeddings.create(
-            input=["Parties involved, rent details, address, and legal obligations"],
-            model="text-embedding-3-small"
-        )
-        query_vector = res.data[0].embedding
+        # --- Client Resolution ---
+        if openai_client is None:
+            openai_client = OpenAI(
+                api_key=os.getenv("OPENAI_API_KEY"),
+                base_url=os.getenv("OPENAI_PROXY_URL") or "https://api.openai-proxy.com/v1"
+            )
+        if pinecone_index is None:
+            pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+            pinecone_index = pc.Index("leasesight-index")
 
-        results = pinecone_index.query(
-            vector=query_vector,
-            top_k=15,
-            filter={"file_name": {"$eq": target_file}},
-            include_metadata=True
-        )
+        print(f"--- STARTING MULTI-AGENT AUDIT FOR: {target_file} ---")
 
-        if not results['matches']:
-            print(f"No matching segments found for: {target_file}")
-            return {"error": "Document not found in database. Please ensure it has been uploaded and wait a few moments for indexing to complete."}
+        # 1. Broad Retrieval from Pinecone
+        try:
+            res = openai_client.embeddings.create(
+                input=["Parties involved, rent details, address, and legal obligations"],
+                model="text-embedding-3-small"
+            )
+            query_vector = res.data[0].embedding
 
-        sorted_matches = sorted(
-            results['matches'],
-            key=lambda x: x['metadata'].get('page_number', 0)
-        )
-        context = "\n".join([
-            f"Page {m['metadata']['page_number']}: {m['metadata']['text']}"
-            for m in sorted_matches
-        ])
+            results = pinecone_index.query(
+                vector=query_vector,
+                top_k=15,
+                filter={"file_name": {"$eq": target_file}},
+                include_metadata=True
+            )
+
+            if not results['matches']:
+                print(f"No matching segments found for: {target_file}")
+                return {"error": "Document not found in database. Please wait 10 seconds for indexing to complete."}
+
+            sorted_matches = sorted(
+                results['matches'],
+                key=lambda x: x['metadata'].get('page_number', 0)
+            )
+            context = "\n".join([
+                f"Page {m['metadata']['page_number']}: {m['metadata']['text']}"
+                for m in sorted_matches
+            ])
+        except Exception as e:
+            return {"error": f"Database retrieval failed: {str(e)}"}
+
+        # 2. Market Context
+        try:
+            market_res = openai_client.embeddings.create(
+                input=["Standard lease termination, security deposit, and renewal clauses"],
+                model="text-embedding-3-small"
+            )
+            market_vec = market_res.data[0].embedding
+            market_results = pinecone_index.query(
+                vector=market_vec,
+                top_k=5,
+                filter={"file_name": {"$ne": target_file}},
+                include_metadata=True
+            )
+            market_context = "\n".join([
+                f"Precedent: {m['metadata'].get('text', '')}"
+                for m in market_results.get('matches', [])
+            ])
+            if not market_context:
+                market_context = "No precedents available."
+        except Exception:
+            market_context = "Market context unavailable."
+
+        # 3. PIPELINE
+        miner_output = agent_miner(context, openai_client)
+        judge_output = agent_judge(miner_output, market_context, openai_client)
+        final_report = agent_clerk(miner_output, judge_output, openai_client)
+
+        return final_report
+
     except Exception as e:
-        print(f"Pinecone Retrieval Error: {e}")
-        return {"error": f"Database retrieval failed: {str(e)}"}
-
-    # 2. Market Context from Pinecone
-    try:
-        market_res = openai_client.embeddings.create(
-            input=["Standard lease termination, security deposit, and renewal clauses"],
-            model="text-embedding-3-small"
-        )
-        market_vec = market_res.data[0].embedding
-        market_results = pinecone_index.query(
-            vector=market_vec,
-            top_k=5,
-            filter={"file_name": {"$ne": target_file}},
-            include_metadata=True
-        )
-        market_context = "\n".join([
-            f"Precedent: {m['metadata'].get('text', '')}"
-            for m in market_results.get('matches', [])
-        ])
-        if not market_context:
-            market_context = "No precedents available in the database for comparison."
-    except Exception as e:
-        print(f"Market Context Error: {e}")
-        market_context = "Market context unavailable."
-
-    # 3. PIPELINE: Miner → Judge → Clerk
-    miner_output = agent_miner(context, openai_client)
-    judge_output = agent_judge(miner_output, market_context, openai_client)
-    final_report = agent_clerk(miner_output, judge_output, openai_client)
-
-    print(f"--- AUDIT COMPLETE: {len(final_report.get('findings', []))} findings, "
-          f"Risk: {final_report.get('risk_score', '?')}/10 ---")
-
-    return final_report
+        return {"error": f"Audit pipeline crash: {str(e)}"}
 
 
 if __name__ == "__main__":
