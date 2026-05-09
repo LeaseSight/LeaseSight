@@ -102,11 +102,15 @@ async def start_audit(request: dict):
 @app.get("/api/health")
 async def health():
     return {
-        "status": "healthy",
-        "version": "1.0.5",
-        "last_sync": "2026-05-09 20:25:00",
+        "status": "ULTRA_HEALTHY",
+        "version": "1.0.6",
+        "last_sync": "2026-05-09 20:35:00",
         "proxy": os.environ.get("OPENAI_BASE_URL")
     }
+
+@app.get("/api/ping")
+async def ping():
+    return {"message": "PONG - NEW CODE IS LIVE"}
 
 @app.get("/api/documents")
 async def list_documents():
