@@ -71,12 +71,11 @@ export default function SettingsPage() {
     setTestStatus('testing');
     setTestMessage('');
     try {
-      const health = await api.health();
-      const ok = health.openai === 'connected' && health.pinecone === 'connected';
-      setTestStatus(ok ? 'ok' : 'error');
-      setTestMessage(ok
+      const res = await api.testConnection();
+      setTestStatus(res.success ? 'ok' : 'error');
+      setTestMessage(res.success
         ? 'All services connected successfully!'
-        : `OpenAI: ${health.openai} | Pinecone: ${health.pinecone}`);
+        : `OpenAI: ${res.openai} | Pinecone: ${res.pinecone}`);
     } catch (e: unknown) {
       setTestStatus('error');
       setTestMessage(e instanceof Error ? e.message : 'Connection failed. Check your keys.');

@@ -403,19 +403,30 @@ async def get_migration_status(batch_id: str):
     }
 
 @app.get("/api/test-connection")
-async def test_connection(x_openai_key: Optional[str] = Header(None), x_api_key: Optional[str] = Header(None)):
+async def test_connection(
+    x_openai_key: Optional[str] = Header(None), 
+    x_pinecone_key: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None)
+):
     """
-    Verifies if the provided API key is valid (basic format check).
-    Accepts either X-OpenAI-Key or a universal X-API-Key.
+    Verifies if the provided API keys are valid (basic format check).
     """
-    key = x_openai_key or x_api_key
-    if not key:
-        return {"success": False, "message": "No API key provided."}
+    openai_key = x_openai_key or x_api_key
+    pinecone_key = x_pinecone_key
     
-    if key.startswith("sk-"):
-        return {"success": True, "message": "Connection established with custom key."}
+    status = {
+        "openai": "connected" if (openai_key and openai_key.startswith("sk-")) else "missing",
+        "pinecone": "connected" if (pinecone_key and (pinecone_key.startswith("pcsk_") or len(pinecone_key) > 10)) else "missing",
+    }
     
-    return {"success": False, "message": "Invalid key format. Ensure it starts with 'sk-'."}
+    success = status["openai"] == "connected" and status["pinecone"] == "connected"
+    
+    return {
+        "success": success,
+        "openai": status["openai"],
+        "pinecone": status["pinecone"],
+        "message": "All services connected." if success else "Some services are missing or invalid."
+    }
 
 @app.get("/pdfs/{filename:path}")
 async def serve_pdf(filename: str):
