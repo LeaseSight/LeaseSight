@@ -13,7 +13,6 @@ const RightPane = dynamic(() => import('@/components/RightPane').then(mod => mod
 import { ChatOverlay } from '@/components/ChatOverlay';
 import { NetworkPanel } from '@/components/NetworkPanel';
 import { AuditResult, Annotation } from '@/lib/types';
-import { useEffect } from 'react';
 
 export default function Home() {
   const [selectedDoc, setSelectedDoc] = useState<string | null>(null);
