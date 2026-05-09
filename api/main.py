@@ -52,8 +52,8 @@ app.add_middleware(
 async def health():
     return {
         "status": "ULTRA_HEALTHY",
-        "version": "1.2.1",
-        "last_sync": "2026-05-09 21:35:00",
+        "version": "1.2.2",
+        "last_sync": "2026-05-09 21:38:00",
         "proxy": os.environ.get("OPENAI_BASE_URL")
     }
 
