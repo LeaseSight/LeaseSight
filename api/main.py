@@ -168,7 +168,7 @@ async def verify_auth(request: Request):
 # SERVICE 1: UNIVERSAL LEGACY MIGRATION
 # ---------------------------------------------------------------------------
 
-@app.post("/api/migrate/upload")
+@app.post("/api/upload")
 async def start_migration(
     background_tasks: BackgroundTasks, 
     files: List[UploadFile] = File(...), 
