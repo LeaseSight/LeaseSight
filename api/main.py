@@ -39,23 +39,20 @@ async def get_api_keys(request: Request) -> AuthKeys:
 
 app = FastAPI(title="LeaseSight Production API")
 
-# --- 3. BULLETPROOF CORS MIDDLEWARE ---
+# --- 3. PRODUCTION CORS MIDDLEWARE ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://www.leasesights.tech",
+        "https://leasesights.tech",
+        "http://localhost:3000",
+        "http://localhost:8000"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"]
 )
-
-@app.middleware("http")
-async def add_process_time_header(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "*"
-    return response
 
 @app.get("/api/health")
 async def health():
