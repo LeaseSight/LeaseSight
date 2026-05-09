@@ -1,5 +1,8 @@
 import os, sys, json, sqlite3, uuid, hashlib
-# MASTER KEY FIX: Force global proxy for all library calls
+# 1. PATH FIX: Ensure Docker can see the project root
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# 2. MASTER KEY FIX: Force global proxy for all library calls
 os.environ["OPENAI_BASE_URL"] = os.getenv("OPENAI_PROXY_URL") or "https://api.openai-proxy.com/v1"
 from datetime import datetime
 from pathlib import Path

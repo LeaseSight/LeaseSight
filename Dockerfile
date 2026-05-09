@@ -1,21 +1,19 @@
 # Optimized Dockerfile for LeaseSight
-# 1. Use a lightweight base image
 FROM python:3.11-slim
 
-# 2. Set working directory
+# 1. Environment Fixes
 WORKDIR /app
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
 
-# 3. Optimize Layer Caching: Install dependencies first
-# This ensures that 'pip install' is only re-run if requirements.txt changes
+# 2. Dependency Optimization
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 4. Copy the rest of the application
-# Use .dockerignore to skip data, venv, and cache folders
+# 3. Application Setup
 COPY . .
-
-# 5. Expose the port (FastAPI default)
 EXPOSE 8080
 
-# 6. Run the application
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# 4. Correct Startup Command
+# Using "python api/main.py" as requested
+CMD ["python", "api/main.py"]
