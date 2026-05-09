@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 # 2. MASTER KEY FIX: Force global proxy for all library calls
 os.environ["OPENAI_BASE_URL"] = os.getenv("OPENAI_PROXY_URL") or "https://api.openai-proxy.com/v1"
+
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -15,12 +16,8 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from openai import OpenAI
 from pinecone import Pinecone
-from azure.ai.formrecognizer import DocumentAnalysisClient
-from azure.core.credentials import AzureKeyCredential
 
 # Local Imports
-BASE_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(BASE_DIR))
 from api.schemas import EntityStatus, MigrationEntity, MigrationTask, ResearchAuditRequest, ResearchScorecard, AuthKeys
 from api.processor import UniversalProcessor, ResearchAuditor
 from scripts.processor import process_new_pdf
@@ -28,6 +25,7 @@ from scripts.query_engine import ask_document
 from scripts.visual_anchor import find_coordinates
 from scripts.full_audit import run_full_audit
 
+BASE_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(BASE_DIR / ".env")
 DB_PATH = BASE_DIR / "leasesight.db"
 RAW_PDF_DIR = BASE_DIR / "data" / "raw_pdfs"
@@ -47,53 +45,36 @@ def init_db():
 
 init_db()
 
-app = FastAPI(title="LeaseSight Production API", version="4.0")
+app = FastAPI(title="LeaseSight Production API", version="5.0")
 
-# 1. PERMANENT CORS FIX
+# PERMANENT CORS FIX
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://www.leasesights.tech",
-        "https://leasesights.tech",
-        "http://localhost:3000"
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ---------------------------------------------------------------------------
-# DEPENDENCY: HYBRID KEY SYSTEM (BYOK + Managed)
+# DEPENDENCIES
 # ---------------------------------------------------------------------------
 
 async def get_api_keys(request: Request) -> AuthKeys:
-    universal_key = request.headers.get("X-API-Key")
-    openai_key = request.headers.get("X-OpenAI-Key") or universal_key or os.getenv("MANAGED_OPENAI_KEY") or os.getenv("OPENAI_API_KEY")
-    pinecone_key = request.headers.get("X-Pinecone-Key") or os.getenv("MANAGED_PINECONE_KEY") or os.getenv("PINECONE_API_KEY")
-    azure_key = request.headers.get("X-Azure-Key") or os.getenv("MANAGED_AZURE_KEY") or os.getenv("AZURE_KEY")
-    azure_endpoint = request.headers.get("X-Azure-Endpoint") or os.getenv("MANAGED_AZURE_ENDPOINT") or os.getenv("AZURE_ENDPOINT")
-
-    if not openai_key:
-        raise HTTPException(status_code=401, detail="No OpenAI API key provided.")
-
-    return AuthKeys(openai_key=openai_key, pinecone_key=pinecone_key, azure_key=azure_key, azure_endpoint=azure_endpoint)
+    openai_key = request.headers.get("X-OpenAI-Key") or os.getenv("OPENAI_API_KEY")
+    pinecone_key = request.headers.get("X-Pinecone-Key") or os.getenv("PINECONE_API_KEY")
+    if not openai_key: raise HTTPException(status_code=401, detail="No OpenAI API key.")
+    return AuthKeys(openai_key=openai_key, pinecone_key=pinecone_key, azure_key=os.getenv("AZURE_KEY"), azure_endpoint=os.getenv("AZURE_ENDPOINT"))
 
 def get_clients(keys: AuthKeys = Depends(get_api_keys)):
-    # 2. PERMANENT GEOBLOCK FIX (PROXY)
-    openai_base_url = os.getenv("OPENAI_PROXY_URL") or "https://api.openai-proxy.com/v1"
-    os.environ["OPENAI_BASE_URL"] = openai_base_url # Global safety net
-    openai_client = OpenAI(api_key=keys.openai_key, base_url=openai_base_url)
+    proxy = os.environ["OPENAI_BASE_URL"]
+    openai_client = OpenAI(api_key=keys.openai_key, base_url=proxy)
     pc = Pinecone(api_key=keys.pinecone_key)
-    pinecone_index = pc.Index("leasesight-index")
-    
-    azure_client = None
-    if keys.azure_key and keys.azure_endpoint:
-        azure_client = DocumentAnalysisClient(endpoint=keys.azure_endpoint, credential=AzureKeyCredential(keys.azure_key))
-        
-    return {"openai": openai_client, "pinecone": pinecone_index, "azure": azure_client}
+    index = pc.Index("leasesight-index")
+    return {"openai": openai_client, "pinecone": index}
 
 # ---------------------------------------------------------------------------
-# SERVICE 1: UNIVERSAL LEGACY MIGRATION
+# ENDPOINTS
 # ---------------------------------------------------------------------------
 
 @app.post("/api/upload")
@@ -109,7 +90,6 @@ async def start_migration(
     with open(target_path, "wb") as f:
         f.write(content)
 
-    # Initialize batch in DB
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("INSERT INTO migration_batches (id, timestamp, user_hash, total_files, processed_files, status) VALUES (?,?,?,?,?,?)",
@@ -117,104 +97,32 @@ async def start_migration(
     conn.commit()
     conn.close()
 
-    # Trigger background task
-    processor = UniversalProcessor(clients['openai'], clients['pinecone'], clients['azure'])
+    processor = UniversalProcessor(clients['openai'], clients['pinecone'], None)
     background_tasks.add_task(processor.process_batch, task_id, [file.filename])
-
     return {"status": "success", "task_id": task_id, "filename": file.filename}
-
-@app.get("/api/migrate/review/{task_id}")
-async def get_migration_review(task_id: str):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id, file_name, category, value, confidence, status FROM migration_results WHERE batch_id = ?", (task_id,))
-    rows = c.fetchall()
-    conn.close()
-    return [MigrationEntity(id=r[0], file_name=r[1], category=r[2], value=r[3], confidence=r[4], status=r[5]) for r in rows]
-
-@app.post("/api/migrate/finalize")
-async def finalize_migration(task_id: str):
-    conn = sqlite3.connect(DB_PATH)
-    import pandas as pd
-    import io
-    df = pd.read_sql_query("SELECT file_name, category, value, confidence FROM migration_results WHERE batch_id = ? AND status = 'APPROVED'", conn, params=(task_id,))
-    conn.close()
-    if df.empty: raise HTTPException(status_code=400, detail="No approved items found.")
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False, sheet_name='MigrationResults')
-    output.seek(0)
-    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename=Export_{task_id}.xlsx"})
-
-# ---------------------------------------------------------------------------
-# SERVICE 2: PEER-REVIEW & AUDIT
-# ---------------------------------------------------------------------------
-
-@app.post("/api/audit/research")
-async def run_research_audit(request: ResearchAuditRequest, clients: dict = Depends(get_clients)):
-    auditor = ResearchAuditor(clients['openai'], clients['pinecone'])
-    return await auditor.audit_paper(request.file_name)
 
 @app.post("/api/audit")
 async def start_audit(request: dict, clients: dict = Depends(get_clients)):
     try:
         file_name = request.get("file_name")
-        if not file_name:
-            return {"error": "file_name is required", "status": 400}
+        if not file_name: return {"error": "file_name required"}
         
-        print(f"[API] Initializing audit for: {file_name}")
         report = run_full_audit(file_name, openai_client=clients['openai'], pinecone_index=clients['pinecone'])
-        
-        if not report:
-            return {"error": "Audit engine failed to return a response.", "status": 500}
-        
-        if "error" in report:
-            # If it's a 'not found' error, it's usually a 404/waiting state
-            return {"error": report["error"], "status": 404 if "not found" in report["error"].lower() else 500}
+        if not report: return {"error": "Audit failed"}
+        if "error" in report: return report
 
-        # Visual Grounding Mapping
         annotations = []
-        findings = report.get("findings", [])
-        for finding in findings:
+        for finding in report.get("findings", []):
             quote = finding.get("evidence_quote")
             if quote and quote != "Not Found":
-                try:
-                    coords = find_coordinates(file_name, quote)
-                    if coords and "bounding_box" in coords:
-                        bbox = coords["bounding_box"]
-                        if len(bbox) >= 4:
-                            annotations.append({
-                                "page": int(coords.get('page', 1)),
-                                "x": bbox[0]['x'],
-                                "y": bbox[0]['y'],
-                                "width": bbox[2]['x'] - bbox[0]['x'],
-                                "height": bbox[2]['y'] - bbox[0]['y'],
-                                "color": "#3b82f6"
-                            })
-                except Exception as e:
-                    print(f"[GROUNDING] Warning: Mapping failed for quote: {e}")
-
+                coords = find_coordinates(file_name, quote)
+                if coords and "bounding_box" in coords and len(coords["bounding_box"]) >= 4:
+                    bbox = coords["bounding_box"]
+                    annotations.append({"page": int(coords['page']), "x": bbox[0]['x'], "y": bbox[0]['y'], "width": bbox[2]['x'] - bbox[0]['x'], "height": bbox[2]['y'] - bbox[0]['y'], "color": "#3b82f6"})
         report["annotations"] = annotations
         return report
-
     except Exception as e:
-        print(f"[CRITICAL] API Audit Crash: {str(e)}")
-        return {"error": f"Internal Server Error: {str(e)}", "status": 500}
-
-@app.post("/api/chat")
-async def chat(request: dict, clients: dict = Depends(get_clients)):
-    query, file_name = request.get("query"), request.get("file_name")
-    if not query or not file_name: raise HTTPException(status_code=400, detail="query/file_name required")
-    result = ask_document(query, file_name, openai_client=clients['openai'], pinecone_index=clients['pinecone'])
-    if result.get("source_text"):
-        coords = find_coordinates(file_name, result["source_text"])
-        if coords:
-            result["annotation"] = {"page": int(coords['page']), "x": coords['bounding_box'][0]['x'], "y": coords['bounding_box'][0]['y'], "width": coords['bounding_box'][2]['x'] - coords['bounding_box'][0]['x'], "height": coords['bounding_box'][2]['y'] - coords['bounding_box'][0]['y'], "color": "#10b981"}
-    return result
-
-# ---------------------------------------------------------------------------
-# CORE ENDPOINTS
-# ---------------------------------------------------------------------------
+        return {"error": str(e)}
 
 @app.get("/api/documents")
 async def list_documents():
@@ -222,15 +130,8 @@ async def list_documents():
     return {"documents": pdfs, "count": len(pdfs)}
 
 @app.get("/api/health")
-async def health(request: Request):
-    openai_key = request.headers.get("X-OpenAI-Key") or request.headers.get("X-API-Key") or os.getenv("MANAGED_OPENAI_KEY") or os.getenv("OPENAI_API_KEY")
-    return {"status": "healthy", "version": "4.0", "openai": "connected" if openai_key else "missing"}
-
-@app.get("/api/test-connection")
-async def test_connection(x_openai_key: Optional[str] = Header(None), x_api_key: Optional[str] = Header(None)):
-    openai_key = x_openai_key or x_api_key
-    success = openai_key and openai_key.startswith("sk-")
-    return {"success": success, "openai": "connected" if success else "missing"}
+async def health():
+    return {"status": "healthy", "proxy": os.environ["OPENAI_BASE_URL"]}
 
 @app.get("/pdfs/{filename:path}")
 async def serve_pdf(filename: str):
