@@ -85,29 +85,52 @@ async def start_migration(
     
     return {"status": "success", "task_id": task_id, "files": file_names}
 
-@app.post("/api/audit")
-async def start_audit(request: dict):
-    try:
-        file_name = request.get("file_name")
-        if not file_name: return {"error": "file_name required"}
-        
-        # Hardcoded proxy initialization
-        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url="https://api.openai-proxy.com/v1")
-        pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-        index = pc.Index("leasesight-index")
-        
-        return run_full_audit(file_name, openai_client=openai_client, pinecone_index=index)
-    except Exception as e:
-        return {"error": f"Internal Server Error: {str(e)}"}
 
 @app.get("/api/health")
 async def health():
     return {
         "status": "ULTRA_HEALTHY",
-        "version": "1.0.7",
-        "last_sync": "2026-05-09 20:55:00",
+        "version": "1.0.8",
+        "last_sync": "2026-05-09 21:01:00",
         "proxy": os.environ.get("OPENAI_BASE_URL")
     }
+
+@app.post("/api/audit")
+async def start_audit(request: dict):
+    try:
+        file_name = request.get("file_name")
+        if not file_name: return {"error": "file_name required", "findings": [], "obligations": []}
+        
+        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url="https://api.openai-proxy.com/v1")
+        pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+        index = pc.Index("leasesight-index")
+        
+        report = run_full_audit(file_name, openai_client=openai_client, pinecone_index=index)
+        
+        # SAFETY NET: Ensure frontend never gets undefined for arrays
+        if not report: report = {}
+        if not isinstance(report, dict): report = {"error": "Invalid engine response"}
+        
+        report.setdefault("findings", [])
+        report.setdefault("obligations", [])
+        report.setdefault("warnings", [])
+        report.setdefault("summary_paragraph", "No summary available.")
+        report.setdefault("risk_score", 5)
+
+        # Visual Grounding
+        annotations = []
+        for finding in report["findings"]:
+            quote = finding.get("evidence_quote")
+            if quote and quote != "Not Found":
+                coords = find_coordinates(file_name, quote)
+                if coords and "bounding_box" in coords:
+                    bbox = coords["bounding_box"]
+                    annotations.append({"page": int(coords.get('page', 1)), "x": bbox[0]['x'], "y": bbox[0]['y'], "width": bbox[2]['x'] - bbox[0]['x'], "height": bbox[2]['y'] - bbox[0]['y'], "color": "#3b82f6"})
+        
+        report["annotations"] = annotations
+        return report
+    except Exception as e:
+        return {"error": str(e), "findings": [], "obligations": [], "warnings": []}
 
 @app.get("/api/index-status/{filename:path}")
 async def get_index_status(filename: str):
