@@ -52,8 +52,8 @@ app.add_middleware(
 async def health():
     return {
         "status": "ULTRA_HEALTHY",
-        "version": "1.2.0",
-        "last_sync": "2026-05-09 21:30:00",
+        "version": "1.2.1",
+        "last_sync": "2026-05-09 21:35:00",
         "proxy": os.environ.get("OPENAI_BASE_URL")
     }
 
@@ -72,10 +72,11 @@ async def commit_audit(request: dict):
     if not task_id: raise HTTPException(status_code=400, detail="task_id required")
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    c.execute("UPDATE migration_results SET status = 'APPROVED' WHERE batch_id = ?", (task_id,))
     c.execute("UPDATE migration_batches SET status = 'COMPLETED' WHERE id = ?", (task_id,))
     conn.commit()
     conn.close()
-    return {"status": "success", "message": f"Audit {task_id} committed."}
+    return {"status": "success", "message": f"Audit {task_id} approved and committed."}
 
 @app.post("/api/export/{filename:path}")
 async def export_audit(filename: str, request: dict):
