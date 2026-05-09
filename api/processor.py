@@ -1,4 +1,6 @@
 import os
+# MASTER KEY FIX: Force global proxy for background tasks
+os.environ["OPENAI_BASE_URL"] = os.getenv("OPENAI_PROXY_URL") or "https://api.openai-proxy.com/v1"
 import json
 import sqlite3
 from typing import List, Dict, Any
