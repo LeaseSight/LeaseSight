@@ -13,7 +13,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 DB_PATH = BASE_DIR / "leasesight.db"
 
 class UniversalProcessor:
-    def __init__(self, openai_client: OpenAI, pinecone_index: Any, azure_client: Any = None):
+    def __init__(self, openai_client, pinecone_index, azure_client):
         self.openai = openai_client
         self.pinecone = pinecone_index
         self.azure = azure_client
