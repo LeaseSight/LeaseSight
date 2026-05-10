@@ -1,6 +1,7 @@
 'use client';
 
 import { Header } from '@/components/Header';
+import { BackNavigation } from '@/components/BackNavigation';
 import { 
   Check, Zap, ShieldCheck, Database, 
   Cpu, Globe, ArrowRight, Sparkles 
@@ -18,10 +19,13 @@ export default function PricingPage() {
       </div>
 
       <nav className="relative z-50 h-20 flex items-center justify-between px-8 max-w-7xl mx-auto">
-        <Link href="/" className="flex items-center gap-2">
-          <Zap className="w-5 h-5 text-purple-400" />
-          <span className="font-bold text-lg tracking-widest font-mono">LEASESIGHT</span>
-        </Link>
+        <div className="flex w-full items-center justify-between gap-4">
+          <Link href="/" className="flex items-center gap-2">
+            <Zap className="w-5 h-5 text-purple-400" />
+            <span className="font-bold text-lg tracking-widest font-mono">LEASESIGHT</span>
+          </Link>
+          <BackNavigation breadcrumbs={[{ label: 'Home', href: '/' }, { label: 'Pricing' }]} useBackButton />
+        </div>
       </nav>
 
       <main className="relative z-10 max-w-7xl mx-auto px-8 py-20">

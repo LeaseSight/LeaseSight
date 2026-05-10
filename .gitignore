@@ -14,3 +14,28 @@ __pycache__/
 .DS_Store
 
 "Imp Terms/"
+
+# Sensitive Keys
+.env
+.env.local
+*.pem
+
+# Databases & Large Data
+leasesight.db
+data/raw_pdfs/
+data/json_maps/
+
+# Python / Virtual Envs
+.venv/
+env/
+__pycache__/
+*.pyc
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+
+# System Files
+.DS_Store
+Thumbs.db

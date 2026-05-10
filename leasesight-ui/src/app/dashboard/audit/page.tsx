@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import { useUser } from '@clerk/nextjs';
 import { FileText, ListChecks } from 'lucide-react';
 import { Header } from '@/components/Header';
+import { BackNavigation } from '@/components/BackNavigation';
 import { LeftPane } from '@/components/LeftPane';
 import { ChatOverlay } from '@/components/ChatOverlay';
 import { NetworkPanel } from '@/components/NetworkPanel';
@@ -98,6 +99,11 @@ export default function AuditDashboard() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-[#F9FAFB]">
+      <div className="border-b border-[var(--border-default)] bg-white px-4 py-3">
+        <div className="enterprise-container">
+          <BackNavigation breadcrumbs={[{ label: 'Dashboard' }, { label: 'Audit' }]} useBackButton />
+        </div>
+      </div>
       <Header
         isAuditing={isAuditing}
         onToggleNetwork={() => {

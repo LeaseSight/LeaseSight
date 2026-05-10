@@ -3,8 +3,9 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { SignInButton, UserButton, useAuth } from '@clerk/nextjs';
-import { ArrowRight, Binary, Brackets, FileSearch, Gauge, Layers3, X } from 'lucide-react';
+import { ArrowRight, Binary, Brackets, FileSearch, Gauge, Layers3, Loader2, X } from 'lucide-react';
 import { BrandLogo } from '@/components/BrandLogo';
+import { showErrorToast, showSuccessToast } from '@/lib/errorMessages';
 
 type ModalName = 'about' | 'contact' | null;
 
@@ -30,6 +31,8 @@ const features = [
     copy: 'Powered by Azure Document Intelligence and Pinecone Vector RAG for scalable archive ingestion.',
   },
 ];
+
+const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function Modal({ name, onClose }: { name: ModalName; onClose: () => void }) {
   if (!name) return null;
@@ -65,24 +68,63 @@ function Modal({ name, onClose }: { name: ModalName; onClose: () => void }) {
             </p>
           </div>
         ) : (
-          <form className="grid gap-3">
-            <input className="border border-slate-300 bg-white px-3 py-3 text-sm outline-none transition focus:border-[#1A1A1A]" placeholder="Work email" />
-            <input className="border border-slate-300 bg-white px-3 py-3 text-sm outline-none transition focus:border-[#1A1A1A]" placeholder="Industry" />
-            <select className="border border-slate-300 bg-white px-3 py-3 text-sm text-slate-500 outline-none transition focus:border-[#1A1A1A]">
-              <option>Company Size</option>
-              <option>1-50</option>
-              <option>51-250</option>
-              <option>251-1,000</option>
-              <option>1,000+</option>
-            </select>
-            <textarea className="min-h-28 border border-slate-300 bg-white px-3 py-3 text-sm outline-none transition focus:border-[#1A1A1A]" placeholder="Tell us about your lease audit workflow" />
-            <button type="button" className="mt-2 bg-[#1A1A1A] px-5 py-3 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-slate-700">
-              Submit Inquiry
-            </button>
-          </form>
+          <ContactForm onSuccess={onClose} />
         )}
       </div>
     </div>
+  );
+}
+
+function ContactForm({ onSuccess }: { onSuccess?: () => void }) {
+  const [email, setEmail] = useState('');
+  const [industry, setIndustry] = useState('');
+  const [companySize, setCompanySize] = useState('');
+  const [message, setMessage] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!emailRegex.test(email.trim())) return showErrorToast(new Error('Please enter a valid email address.'));
+    if (!industry.trim()) return showErrorToast(new Error('Please enter your industry.'));
+    if (!message.trim()) return showErrorToast(new Error('Please enter a message.'));
+    if (submitting) return;
+
+    setSubmitting(true);
+    try {
+      await fetch('/api/contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim(), industry: industry.trim(), company_size: companySize, message: message.trim() }),
+      });
+      showSuccessToast('Thank you. A LeaseSight consultant will reach out to you within 24 hours');
+      setEmail('');
+      setIndustry('');
+      setCompanySize('');
+      setMessage('');
+      onSuccess?.();
+    } catch (err) {
+      showErrorToast(err, 'Submission failed');
+    } finally {
+      setTimeout(() => setSubmitting(false), 2000);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="grid gap-3">
+      <input value={email} onChange={e => setEmail(e.target.value)} className="border border-slate-300 bg-white px-3 py-3 text-sm outline-none transition focus:border-[#1A1A1A]" placeholder="Work email" />
+      <input value={industry} onChange={e => setIndustry(e.target.value)} className="border border-slate-300 bg-white px-3 py-3 text-sm outline-none transition focus:border-[#1A1A1A]" placeholder="Industry" />
+      <select value={companySize} onChange={e => setCompanySize(e.target.value)} className="border border-slate-300 bg-white px-3 py-3 text-sm text-slate-500 outline-none transition focus:border-[#1A1A1A]">
+        <option value="">Company Size</option>
+        <option>1-50</option>
+        <option>51-250</option>
+        <option>251-1,000</option>
+        <option>1,000+</option>
+      </select>
+      <textarea value={message} onChange={e => setMessage(e.target.value)} className="min-h-28 border border-slate-300 bg-white px-3 py-3 text-sm outline-none transition focus:border-[#1A1A1A]" placeholder="Tell us about your lease audit workflow" />
+      <button disabled={submitting} type="submit" className="mt-2 bg-[#1A1A1A] px-5 py-3 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50">
+        {submitting ? <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Sending...</span> : 'Submit Inquiry'}
+      </button>
+    </form>
   );
 }
 
@@ -124,7 +166,7 @@ export default function LandingPage() {
         </nav>
       </header>
 
-      <section className="enterprise-container flex min-h-[88vh] flex-col items-center justify-center pt-28 text-center">
+      <section className="enterprise-container flex min-h-[84vh] flex-col items-center justify-center pt-20 text-center">
         <div className="mb-7 inline-flex items-center gap-2 border border-slate-300 bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">
           <Binary className="h-4 w-4 text-[#1A1A1A]" />
           Industrial legal intelligence
@@ -146,9 +188,9 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <section id="offer" className="border-y border-slate-200 bg-white py-24">
+      <section id="offer" className="border-y border-slate-200 bg-white py-14">
         <div className="enterprise-container">
-          <div className="mb-12 max-w-2xl">
+          <div className="mb-8 max-w-2xl">
             <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">What We Offer</p>
             <h2 className="mt-4 text-4xl font-semibold tracking-tight text-[#1A1A1A]">A disciplined audit layer for lease-heavy operations.</h2>
           </div>
@@ -167,7 +209,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <footer className="bg-[#1A1A1A] py-16 text-white">
+      <footer className="bg-[#1A1A1A] py-10 text-white">
         <div className="enterprise-container grid gap-10 md:grid-cols-[1.2fr_1fr_0.8fr]">
           <div>
             <BrandLogo className="text-white [&_span:last-child]:text-white" />

@@ -46,6 +46,35 @@ JSON_MAP_DIR = os.path.join(BASE_DIR, "data", "json_maps")
 os.makedirs(RAW_PDF_DIR, exist_ok=True)
 os.makedirs(JSON_MAP_DIR, exist_ok=True)
 
+
+class ContactPayload(BaseModel):
+    email: str
+    industry: str
+    company_size: str | None = None
+    message: str
+
+
+def init_contact_table():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS contact_inquiries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL,
+            industry TEXT NOT NULL,
+            company_size TEXT,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+init_contact_table()
+
 async def get_api_keys(request: Request) -> AuthKeys:
     openai_key = (
         request.headers.get("X-OpenAI-Key")
@@ -102,6 +131,18 @@ async def test_connection(keys: AuthKeys = Depends(get_api_keys)):
         return {"success": True, "status": "success", "message": "OpenAI connection verified"}
     except Exception as e:
         return {"success": False, "status": "error", "message": str(e)}
+
+@app.post("/api/contact")
+async def contact(payload: ContactPayload):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO contact_inquiries (email, industry, company_size, message) VALUES (?, ?, ?, ?)",
+        (payload.email, payload.industry, payload.company_size, payload.message),
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "success", "message": "Contact request received"}
 
 @app.post("/api/commit")
 async def commit_audit(request: Request):

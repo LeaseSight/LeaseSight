@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { Check, KeyRound, ShieldCheck } from 'lucide-react';
 import { BrandLogo } from '@/components/BrandLogo';
+import { BackNavigation } from '@/components/BackNavigation';
 import { saveSelectedTier } from '@/lib/api';
 
 export default function ChoosePackagePage() {
@@ -18,7 +19,7 @@ export default function ChoosePackagePage() {
       <div className="enterprise-container">
         <header className="mb-12 flex items-center justify-between">
           <BrandLogo />
-          <p className="hidden text-xs font-semibold uppercase tracking-[0.22em] text-slate-500 sm:block">Select Package</p>
+          <BackNavigation breadcrumbs={[{ label: 'Home', href: '/' }]} useBackButton={true} />
         </header>
 
         <section className="mx-auto max-w-3xl text-center">

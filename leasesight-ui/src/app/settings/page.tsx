@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { CheckCircle2, Eye, EyeOff, KeyRound, Loader2, XCircle } from 'lucide-react';
 import { BrandLogo } from '@/components/BrandLogo';
+import { BackNavigation } from '@/components/BackNavigation';
 import { api, getSelectedTier, getStoredKeys, hasStoredKeys, saveStoredKeys } from '@/lib/api';
 
 type TestStatus = 'idle' | 'testing' | 'ok' | 'error';
@@ -53,9 +54,7 @@ export default function SettingsPage() {
       <header className="border-b border-slate-200 bg-white/80 backdrop-blur-xl">
         <div className="enterprise-container flex h-16 items-center justify-between">
           <BrandLogo />
-          <Link href="/dashboard/audit" className="border border-slate-300 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] transition hover:-translate-y-0.5 hover:border-[#1A1A1A]">
-            Dashboard
-          </Link>
+          <BackNavigation breadcrumbs={[{ label: 'Dashboard', href: '/dashboard/audit' }]} />
         </div>
       </header>
 

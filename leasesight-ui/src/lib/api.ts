@@ -71,6 +71,22 @@ export function saveSelectedTier(tier: SubscriptionTier) {
   document.cookie = `ls_subscription_tier=${tier}; path=/; max-age=31536000; SameSite=Lax`;
 }
 
+export function requireApiKey(): boolean {
+  const tier = getSelectedTier();
+  const isFree = tier === 'free';
+  if (!isFree) return true;
+  return hasStoredKeys();
+}
+
+export function getApiErrorStatus(error: unknown): number | null {
+  if (typeof error === 'number') return error;
+  if (error instanceof Error) {
+    const match = error.message.match(/error (\d{3})/i);
+    if (match) return parseInt(match[1], 10);
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Invalid Key Error — carries the backend's detail message
 // ---------------------------------------------------------------------------

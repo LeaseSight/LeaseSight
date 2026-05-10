@@ -2,8 +2,10 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { ChevronDown, Play, AlertTriangle, CheckCircle, Database, Download, Upload } from 'lucide-react';
-import { api } from '@/lib/api';
+import Link from 'next/link';
+import { api, requireApiKey } from '@/lib/api';
 import { AuditResult, Annotation } from '@/lib/types';
+import { showErrorToast, showWarningToast } from '@/lib/errorMessages';
 import { RiskGauge } from './RiskGauge';
 import { FindingCard } from './FindingCard';
 import { CommitModal } from './CommitModal';
@@ -34,8 +36,13 @@ export function LeftPane({
   const [committed, setCommitted] = useState(false);
   const [isIndexing, setIsIndexing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [auditStatus, setAuditStatus] = useState('Analyzing Clauses...');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const statusCycleRef = useRef<NodeJS.Timeout | null>(null);
   const analysisLoading = isAuditing || isAuditRunning;
+
+  const auditStatuses = ['Analyzing Clauses...', 'Extracting Lessor...', 'Scoring Risk...'];
+  let statusIndex = 0;
 
   useEffect(() => {
     if (!selectedDoc) return;
@@ -44,6 +51,14 @@ export function LeftPane({
       .catch(console.error)
       .finally(() => setIsIndexing(false));
   }, [selectedDoc]);
+
+  useEffect(() => {
+    return () => {
+      if (statusCycleRef.current) {
+        clearInterval(statusCycleRef.current);
+      }
+    };
+  }, []);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -56,6 +71,7 @@ export function LeftPane({
       onSelectDoc(res.file_name ?? '');
     } catch (error) {
       console.error('Upload failed:', error);
+      showErrorToast(error, 'Upload Failed');
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -64,17 +80,40 @@ export function LeftPane({
 
   const handleRunAudit = async () => {
     if (!selectedDoc) return;
+
+    // Validation gating: Check if Free tier user has API key
+    if (!requireApiKey()) {
+      showWarningToast(
+        'Please add your OpenAI key in Settings to run this audit. Redirecting...'
+      );
+      return;
+    }
+
     setIsAuditing(true);
     setCommitted(false);
     onCommitChange?.(false);
     onAuditStart();
+
+    // Start cycling through status messages
+    statusIndex = 0;
+    setAuditStatus(auditStatuses[0]);
+    statusCycleRef.current = setInterval(() => {
+      statusIndex = (statusIndex + 1) % auditStatuses.length;
+      setAuditStatus(auditStatuses[statusIndex]);
+    }, 1500);
+
     try {
       const result = await api.audit(selectedDoc);
       onAuditComplete(result);
     } catch (e) {
       console.error('Audit failed:', e);
+      showErrorToast(e, 'Audit Failed');
     } finally {
       setIsAuditing(false);
+      if (statusCycleRef.current) {
+        clearInterval(statusCycleRef.current);
+        statusCycleRef.current = null;
+      }
     }
   };
 
@@ -87,6 +126,7 @@ export function LeftPane({
       }
     } catch (e) {
       console.error('Locate failed:', e);
+      showErrorToast(e, 'Location Failed');
     }
   };
 
@@ -102,6 +142,7 @@ export function LeftPane({
       }
     } catch (e) {
       console.error('Commit failed:', e);
+      showErrorToast(e, 'Commit Failed');
     } finally {
       setIsCommitting(false);
     }
@@ -121,6 +162,7 @@ export function LeftPane({
       a.remove();
     } catch (e) {
       console.error('Export failed:', e);
+      showErrorToast(e, 'Export Failed');
     }
   };
 
@@ -193,7 +235,7 @@ export function LeftPane({
           {analysisLoading ? (
             <>
               <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-              Running Pipeline...
+              {auditStatus}
             </>
           ) : isIndexing ? (
             <>
