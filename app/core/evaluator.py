@@ -8,7 +8,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-GEMINI_EVAL_MODEL = os.getenv("GEMINI_EVAL_MODEL", "gemini-3.1-pro-preview")
+GEMINI_EVAL_MODEL = os.getenv("GEMINI_EVAL_MODEL", "gemini-3.1-flash-lite")
+LIVE_EVAL_MODEL = "gemini-3.1-flash-lite"
 
 ACADEMIC_BENCHMARK = {
     "paper_title": "CUAD: An Expert-Annotated NLP Dataset for Legal Contract Review",
@@ -105,14 +106,14 @@ def _load_deepeval_dependencies() -> Dict[str, Any]:
     }
 
 
-def _configure_gemini_model(deps: Dict[str, Any]) -> Any:
+def _configure_gemini_model(deps: Dict[str, Any], model_name: str = GEMINI_EVAL_MODEL) -> Any:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is required to run DeepEval evaluations.")
 
     os.environ["GOOGLE_API_KEY"] = api_key
     return deps["GeminiModel"](
-        model_name=GEMINI_EVAL_MODEL,
+        model_name=model_name,
         api_key=api_key,
         temperature=0,
     )
@@ -182,3 +183,51 @@ def _run_evaluation_sync() -> Dict[str, Dict[str, float]]:
 
 async def run_system_evaluation() -> Dict[str, Dict[str, float]]:
     return await asyncio.to_thread(_run_evaluation_sync)
+
+
+def evaluate_live_document(
+    user_query: str,
+    generated_output: str,
+    retrieved_chunks: List[str],
+) -> Dict[str, float | bool | str]:
+    try:
+        deps = _load_deepeval_dependencies()
+        test_case = deps["LLMTestCase"](
+            input=user_query,
+            actual_output=generated_output,
+            retrieval_context=retrieved_chunks or [],
+        )
+        model = _configure_gemini_model(deps, model_name=LIVE_EVAL_MODEL)
+        metrics = {
+            "faithfulness": deps["FaithfulnessMetric"](
+                threshold=0.6,
+                model=model,
+                include_reason=False,
+            ),
+            "answer_relevance": deps["AnswerRelevanceMetric"](
+                threshold=0.6,
+                model=model,
+                include_reason=False,
+            ),
+        }
+
+        for metric in metrics.values():
+            metric.measure(test_case)
+
+        faithfulness = float(metrics["faithfulness"].score or 0.0)
+        answer_relevance = float(metrics["answer_relevance"].score or 0.0)
+        groundedness_index = (faithfulness + answer_relevance) / 2
+        return {
+            "faithfulness": faithfulness,
+            "answer_relevance": answer_relevance,
+            "groundedness_index": groundedness_index,
+            "is_trusted": faithfulness >= 0.6 and answer_relevance >= 0.6,
+        }
+    except Exception as e:
+        return {
+            "faithfulness": 0.0,
+            "answer_relevance": 0.0,
+            "groundedness_index": 0.0,
+            "is_trusted": False,
+            "error": f"Live evaluation unavailable: {str(e)[:240]}",
+        }

@@ -14,7 +14,7 @@ os.environ["OPENAI_BASE_URL"] = OPENAI_BASE_URL
 
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from io import BytesIO
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends, BackgroundTasks, Header
@@ -36,7 +36,7 @@ from xml.sax.saxutils import escape
 # Local Imports
 from api.schemas import EntityStatus, MigrationEntity, AuthKeys
 from api.processor import UniversalProcessor
-from app.core.evaluator import run_system_evaluation
+from app.core.evaluator import evaluate_live_document, run_system_evaluation
 from scripts.processor import process_new_pdf
 from scripts.full_audit import run_full_audit
 from scripts.visual_anchor import find_coordinates
@@ -56,7 +56,7 @@ class ContactPayload(BaseModel):
     message: str
 
 
-def init_contact_table():
+def init_local_tables():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
@@ -71,11 +71,31 @@ def init_contact_table():
         )
         """
     )
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS live_evaluations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT,
+            file_name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            query TEXT,
+            generated_output TEXT,
+            retrieved_chunk_count INTEGER DEFAULT 0,
+            faithfulness REAL DEFAULT 0,
+            answer_relevance REAL DEFAULT 0,
+            groundedness_index REAL DEFAULT 0,
+            is_trusted INTEGER DEFAULT 0,
+            error TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
 
-init_contact_table()
+init_local_tables()
 
 async def get_api_keys(request: Request) -> AuthKeys:
     openai_key = (
@@ -159,6 +179,182 @@ async def contact(payload: ContactPayload):
     conn.commit()
     conn.close()
     return {"status": "success", "message": "Contact request received"}
+
+def _collect_live_evaluation_chunks(file_name: str, openai_client: OpenAI, pinecone_index) -> List[str]:
+    chunks = []
+    try:
+        res = openai_client.embeddings.create(
+            input=["Lease compliance audit summary, critical clauses, obligations, risk warnings"],
+            model="text-embedding-3-small",
+        )
+        query_vector = res.data[0].embedding
+        results = pinecone_index.query(
+            vector=query_vector,
+            top_k=8,
+            filter={"file_name": {"$eq": file_name}},
+            include_metadata=True,
+        )
+        for match in results.get("matches", []):
+            text = (match.get("metadata") or {}).get("text")
+            if text:
+                chunks.append(str(text))
+    except Exception as e:
+        print(f"[LIVE_EVAL] Pinecone chunk collection skipped for {file_name}: {e}")
+
+    if chunks:
+        return chunks
+
+    json_map_path = os.path.join(JSON_MAP_DIR, f"{file_name}.json")
+    try:
+        with open(json_map_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for page in data.get("pages", [])[:8]:
+            page_text = " ".join(
+                line.get("content", "")
+                for line in page.get("lines", [])
+                if line.get("content")
+            )
+            if page_text.strip():
+                chunks.append(page_text)
+    except Exception as e:
+        print(f"[LIVE_EVAL] JSON map chunk collection skipped for {file_name}: {e}")
+
+    return chunks
+
+def _audit_report_to_text(report: dict) -> str:
+    return json.dumps(
+        {
+            "lease_metadata": report.get("lease_metadata", {}),
+            "findings": report.get("findings", []),
+            "obligations": report.get("obligations", []),
+            "summary_paragraph": report.get("summary_paragraph", ""),
+            "risk_score": report.get("risk_score"),
+            "warnings": report.get("warnings", []),
+        },
+        ensure_ascii=True,
+    )
+
+def _save_live_evaluation_status(
+    task_id: str,
+    file_name: str,
+    status: str,
+    scores: Optional[Dict[str, Any]] = None,
+    query: Optional[str] = None,
+    generated_output: Optional[str] = None,
+    retrieved_chunk_count: int = 0,
+    error: Optional[str] = None,
+):
+    scores = scores or {}
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """
+        INSERT INTO live_evaluations (
+            task_id, file_name, status, query, generated_output, retrieved_chunk_count,
+            faithfulness, answer_relevance, groundedness_index, is_trusted, error
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            task_id,
+            file_name,
+            status,
+            query,
+            generated_output,
+            retrieved_chunk_count,
+            float(scores.get("faithfulness", 0.0) or 0.0),
+            float(scores.get("answer_relevance", 0.0) or 0.0),
+            float(scores.get("groundedness_index", 0.0) or 0.0),
+            1 if scores.get("is_trusted") else 0,
+            error or scores.get("error"),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+def _latest_live_evaluation(file_name: str) -> Optional[Dict[str, Any]]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT *
+        FROM live_evaluations
+        WHERE file_name = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (file_name,),
+    )
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return None
+    data = dict(row)
+    data["is_trusted"] = bool(data.get("is_trusted"))
+    return data
+
+def _run_background_live_verification(
+    task_id: str,
+    file_names: List[str],
+    openai_key: str,
+    pinecone_key: str,
+):
+    openai_client = OpenAI(api_key=openai_key, base_url=os.environ["OPENAI_BASE_URL"])
+    pc = Pinecone(api_key=pinecone_key)
+    index = pc.Index("leasesight-index")
+    live_eval_query = (
+        "Evaluate whether this generated lease clause analysis is grounded in the "
+        "retrieved contract text and relevant to legal compliance review."
+    )
+
+    for file_name in file_names:
+        _save_live_evaluation_status(
+            task_id=task_id,
+            file_name=file_name,
+            status="PROCESSING",
+            query=live_eval_query,
+        )
+        try:
+            for _ in range(12):
+                if os.path.exists(os.path.join(JSON_MAP_DIR, f"{file_name}.json")):
+                    break
+                time.sleep(5)
+
+            report = run_full_audit(
+                file_name,
+                openai_client=openai_client,
+                pinecone_index=index,
+            )
+            if not report or report.get("error"):
+                raise RuntimeError(report.get("error") if isinstance(report, dict) else "Audit report was empty.")
+
+            generated_output = _audit_report_to_text(report)
+            retrieved_chunks = _collect_live_evaluation_chunks(file_name, openai_client, index)
+            scores = evaluate_live_document(
+                user_query=live_eval_query,
+                generated_output=generated_output,
+                retrieved_chunks=retrieved_chunks,
+            )
+            _save_live_evaluation_status(
+                task_id=task_id,
+                file_name=file_name,
+                status="COMPLETED",
+                scores=scores,
+                query=live_eval_query,
+                generated_output=generated_output,
+                retrieved_chunk_count=len(retrieved_chunks),
+            )
+            print(f"[LIVE_EVAL] Completed {file_name}: {scores}")
+        except Exception as e:
+            _save_live_evaluation_status(
+                task_id=task_id,
+                file_name=file_name,
+                status="FAILED",
+                query=live_eval_query,
+                error=str(e)[:500],
+            )
+            print(f"[LIVE_EVAL] Failed for {file_name}: {e}")
 
 @app.post("/api/commit")
 async def commit_audit(request: Request):
@@ -296,6 +492,16 @@ async def start_audit(request: dict, keys: AuthKeys = Depends(get_api_keys)):
         
         report.setdefault("findings", [])
         report.setdefault("obligations", [])
+        live_eval_query = (
+            "Evaluate whether this lease compliance audit is faithful to the retrieved "
+            "contract text and relevant to identifying key lease terms, obligations, and risks."
+        )
+        live_eval_chunks = _collect_live_evaluation_chunks(file_name, openai_client, index)
+        live_trust_scores = evaluate_live_document(
+            user_query=live_eval_query,
+            generated_output=_audit_report_to_text(report),
+            retrieved_chunks=live_eval_chunks,
+        )
         
         # --- FIX: EXHAUSTIVE MARKING LOGIC ---
         annotations = []
@@ -324,6 +530,12 @@ async def start_audit(request: dict, keys: AuthKeys = Depends(get_api_keys)):
                     })
         
         report["annotations"] = annotations
+        report["live_trust_scores"] = live_trust_scores
+        report["analysis_results"] = {
+            key: value
+            for key, value in report.items()
+            if key not in {"analysis_results", "live_trust_scores"}
+        }
         return report
     except Exception as e:
         return {"error": str(e), "findings": [], "obligations": []}
@@ -366,7 +578,23 @@ async def start_migration(background_tasks: BackgroundTasks, files: List[UploadF
         processor = UniversalProcessor(openai_client, index, None)
         background_tasks.add_task(index_uploaded_files)
         background_tasks.add_task(processor.process_batch, task_id, file_names)
-        return {"status": "success", "task_id": task_id, "file_name": file_names[0], "files": file_names}
+        background_tasks.add_task(
+            _run_background_live_verification,
+            task_id,
+            file_names,
+            keys.openai_key,
+            keys.pinecone_key,
+        )
+        return {
+            "status": "success",
+            "task_id": task_id,
+            "file_name": file_names[0],
+            "files": file_names,
+            "live_evaluation": {
+                "status": "QUEUED",
+                "status_url": f"/api/live-evaluation/{file_names[0]}",
+            },
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -385,6 +613,31 @@ async def get_index_status(filename: str):
     result = c.fetchone()
     conn.close()
     return {"status": "COMPLETED", "indexed": True} if result else {"status": "PENDING", "indexed": False}
+
+@app.get("/api/live-evaluation/{filename:path}")
+async def get_live_evaluation_status(filename: str):
+    latest = _latest_live_evaluation(filename)
+    if not latest:
+        return {
+            "status": "QUEUED",
+            "file_name": filename,
+            "live_trust_scores": None,
+        }
+
+    return {
+        "status": latest["status"],
+        "file_name": latest["file_name"],
+        "task_id": latest.get("task_id"),
+        "retrieved_chunk_count": latest.get("retrieved_chunk_count", 0),
+        "live_trust_scores": {
+            "faithfulness": latest.get("faithfulness", 0.0),
+            "answer_relevance": latest.get("answer_relevance", 0.0),
+            "groundedness_index": latest.get("groundedness_index", 0.0),
+            "is_trusted": latest.get("is_trusted", False),
+        },
+        "error": latest.get("error"),
+        "updated_at": latest.get("updated_at"),
+    }
 
 @app.get("/api/documents")
 async def list_documents():
