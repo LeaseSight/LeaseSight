@@ -19,6 +19,7 @@ from io import BytesIO
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends, BackgroundTasks, Header
 from fastapi.responses import FileResponse, Response, StreamingResponse
+from pydantic import BaseModel
 from azure.ai.formrecognizer import DocumentAnalysisClient
 from azure.core.credentials import AzureKeyCredential
 from openai import OpenAI
@@ -35,6 +36,7 @@ from xml.sax.saxutils import escape
 # Local Imports
 from api.schemas import EntityStatus, MigrationEntity, AuthKeys
 from api.processor import UniversalProcessor
+from app.core.evaluator import run_system_evaluation
 from scripts.processor import process_new_pdf
 from scripts.full_audit import run_full_audit
 from scripts.visual_anchor import find_coordinates
@@ -122,6 +124,20 @@ async def health():
         "last_sync": "2026-05-10 01:21:00",
         "proxy": os.environ.get("OPENAI_BASE_URL")
     }
+
+@app.get("/api/v1/evaluation")
+async def get_evaluation_summary():
+    try:
+        summary = await run_system_evaluation()
+        return {
+            "status": "success",
+            "deepeval_metrics": summary["deepeval_metrics"],
+            "academic_benchmark": summary["academic_benchmark"],
+        }
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Evaluation failed: {e}")
 
 @app.api_route("/api/test-connection", methods=["GET", "POST", "OPTIONS"])
 async def test_connection(keys: AuthKeys = Depends(get_api_keys)):
