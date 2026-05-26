@@ -71,3 +71,31 @@ export interface CommitResult {
   moved: boolean;
   vectors_updated: number;
 }
+
+export interface EvaluationMetrics {
+  faithfulness: number;
+  answer_relevance: number;
+  context_recall: number;
+}
+
+export interface AcademicBenchmark {
+  paper_title: string;
+  precision: number;
+  recall: number;
+  f1_score: number;
+  paper_f1_score: number;
+  leasesight_f1_score: number;
+}
+
+export interface FailedCase {
+  user_query: string;
+  generated_output: string;
+  failure_reason: 'OCR_ERROR' | 'RETRIEVAL_ERROR' | 'GENERATION_ERROR' | string;
+}
+
+export interface EvaluationSummary {
+  status: string;
+  deepeval_metrics: EvaluationMetrics;
+  academic_benchmark: AcademicBenchmark;
+  failed_cases: FailedCase[];
+}

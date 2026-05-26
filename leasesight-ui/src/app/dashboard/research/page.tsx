@@ -10,6 +10,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { BenchmarkingDashboard } from '@/components/BenchmarkingDashboard';
 
 export default function ResearchPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -193,6 +194,10 @@ export default function ResearchPage() {
               <p className="text-sm font-bold">{error}</p>
             </div>
           )}
+
+          <div className="mt-12">
+            <BenchmarkingDashboard />
+          </div>
 
         </div>
       </div>

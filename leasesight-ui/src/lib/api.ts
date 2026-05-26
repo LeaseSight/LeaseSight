@@ -6,7 +6,7 @@
  * - Catches HTTP 401 responses → redirects to /settings with an "Invalid Key" toast.
  * - All other errors bubble up to the caller.
  */
-import { AuditResult, ChatResponse, LocateResponse, GraphData, HealthStatus, CommitResult } from './types';
+import { AuditResult, ChatResponse, LocateResponse, GraphData, HealthStatus, CommitResult, EvaluationSummary } from './types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://api.leasesights.tech';
 
@@ -158,6 +158,8 @@ export const api = {
   testConnection: () => fetchJSON<{ success?: boolean; status?: string; openai?: string; pinecone?: string; message: string }>('/api/test-connection'),
 
   health: () => fetchJSON<HealthStatus>('/api/health'),
+
+  evaluation: () => fetchJSON<EvaluationSummary>('/api/v1/evaluation'),
 
   documents: () => fetchJSON<{ documents: string[]; count: number }>('/api/documents'),
 

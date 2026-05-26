@@ -153,6 +153,7 @@ async def get_evaluation_summary():
             "status": "success",
             "deepeval_metrics": summary["deepeval_metrics"],
             "academic_benchmark": summary["academic_benchmark"],
+            "failed_cases": summary.get("failed_cases", []),
         }
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))

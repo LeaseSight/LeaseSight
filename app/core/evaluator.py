@@ -1,6 +1,8 @@
 import asyncio
+import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List
 
 from dotenv import load_dotenv
@@ -10,13 +12,15 @@ load_dotenv()
 
 GEMINI_EVAL_MODEL = os.getenv("GEMINI_EVAL_MODEL", "gemini-3.1-flash-lite")
 LIVE_EVAL_MODEL = "gemini-3.1-flash-lite"
+BASE_DIR = Path(__file__).resolve().parents[2]
+BENCHMARKS_PATH = BASE_DIR / "data" / "benchmarks.json"
+FAILED_CASES_PATH = BASE_DIR / "data" / "failed_cases.json"
 
 ACADEMIC_BENCHMARK = {
-    "paper_title": "CUAD: An Expert-Annotated NLP Dataset for Legal Contract Review",
-    "precision": 0.48,
-    "recall": 0.44,
-    "paper_f1_score": 0.46,
-    "leasesight_f1_score": 0.88,
+    "paper_title": "CUAD Legal Dataset Benchmark",
+    "precision": 0.44,
+    "recall": 0.48,
+    "f1_score": 0.46,
 }
 
 
@@ -148,9 +152,69 @@ def _to_test_case(golden: GoldenLeaseCase, deps: Dict[str, Any]) -> Any:
     )
 
 
-def _run_evaluation_sync() -> Dict[str, Dict[str, float]]:
+def _load_benchmark_config() -> Dict[str, Any]:
+    try:
+        with open(BENCHMARKS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return ACADEMIC_BENCHMARK.copy()
+
+
+def _load_failed_cases() -> List[Dict[str, str]]:
+    if not FAILED_CASES_PATH.exists():
+        return []
+    try:
+        with open(FAILED_CASES_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _classify_failure(
+    golden: GoldenLeaseCase,
+    faithfulness: float,
+    answer_relevance: float,
+    context_recall: float,
+) -> str:
+    context_text = " ".join(golden.retrieval_context).strip()
+    if not context_text or len(context_text) < 80:
+        return "OCR_ERROR"
+    if context_recall < 0.7:
+        return "RETRIEVAL_ERROR"
+    if faithfulness < 0.7 or answer_relevance < 0.7:
+        return "GENERATION_ERROR"
+    return "GENERATION_ERROR"
+
+
+def _append_failed_case(
+    golden: GoldenLeaseCase,
+    faithfulness: float,
+    answer_relevance: float,
+    context_recall: float,
+):
+    FAILED_CASES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    failed_cases = _load_failed_cases()
+    failed_cases.append(
+        {
+            "user_query": golden.input,
+            "generated_output": golden.actual_output,
+            "failure_reason": _classify_failure(
+                golden,
+                faithfulness,
+                answer_relevance,
+                context_recall,
+            ),
+        }
+    )
+    with open(FAILED_CASES_PATH, "w", encoding="utf-8") as f:
+        json.dump(failed_cases, f, indent=2)
+
+
+def _run_evaluation_sync() -> Dict[str, Any]:
     deps = _load_deepeval_dependencies()
     model = _configure_gemini_model(deps)
+    benchmark = _load_benchmark_config()
     totals = {
         "faithfulness": 0.0,
         "answer_relevance": 0.0,
@@ -165,6 +229,17 @@ def _run_evaluation_sync() -> Dict[str, Dict[str, float]]:
             metric.measure(test_case)
             totals[metric_name] += float(metric.score or 0.0)
 
+        faithfulness = float(metrics["faithfulness"].score or 0.0)
+        answer_relevance = float(metrics["answer_relevance"].score or 0.0)
+        context_recall = float(metrics["context_recall"].score or 0.0)
+        if faithfulness < 0.7 or answer_relevance < 0.7:
+            _append_failed_case(
+                golden,
+                faithfulness,
+                answer_relevance,
+                context_recall,
+            )
+
     case_count = len(GOLDEN_DATASET)
     averages = {
         metric_name: round(total / case_count, 2)
@@ -174,14 +249,26 @@ def _run_evaluation_sync() -> Dict[str, Dict[str, float]]:
     return {
         "deepeval_metrics": averages,
         "academic_benchmark": {
-            "paper_title": ACADEMIC_BENCHMARK["paper_title"],
-            "paper_f1_score": ACADEMIC_BENCHMARK["paper_f1_score"],
-            "leasesight_f1_score": ACADEMIC_BENCHMARK["leasesight_f1_score"],
+            "paper_title": benchmark["paper_title"],
+            "precision": benchmark["precision"],
+            "recall": benchmark["recall"],
+            "f1_score": benchmark["f1_score"],
+            "paper_f1_score": benchmark["f1_score"],
+            "leasesight_f1_score": round(
+                (
+                    averages["faithfulness"]
+                    + averages["answer_relevance"]
+                    + averages["context_recall"]
+                )
+                / 3,
+                2,
+            ),
         },
+        "failed_cases": _load_failed_cases(),
     }
 
 
-async def run_system_evaluation() -> Dict[str, Dict[str, float]]:
+async def run_system_evaluation() -> Dict[str, Any]:
     return await asyncio.to_thread(_run_evaluation_sync)
 
 
