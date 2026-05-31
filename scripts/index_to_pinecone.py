@@ -1,72 +1,84 @@
+# scripts/index_to_pinecone.py
+# Batch-index all JSON spatial maps into Pinecone using Gemini text-embedding-004 (768-dim).
+# Migrated from OpenAI text-embedding-3-small (1536-dim).
+#
+# Usage:
+#   python -m scripts.index_to_pinecone
+
 import os
 import json
 import time
 from pathlib import Path
 from dotenv import load_dotenv
-from openai import OpenAI
 from pinecone import Pinecone
 
+from scripts.gemini_client import GeminiEmbeddingClient
+
+# ---------------------------------------------------------------------------
 # 1. SETUP
+# ---------------------------------------------------------------------------
 load_dotenv()
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_PROXY_URL") or "https://api.openai.com/v1"
-)
-pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
-# Connect to your newly created index
-index = pc.Index("leasesight-index")
+embed_client = GeminiEmbeddingClient()          # 768-dim text-embedding-004
+pc           = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+index        = pc.Index("leasesight-index")     # Must be recreated at dim=768
 
-BASE_DIR = Path(r"C:\Users\zain\OneDrive\Desktop\LeaseSight")
+BASE_DIR     = Path(__file__).resolve().parents[1]
 JSON_MAP_DIR = BASE_DIR / "data" / "json_maps"
+
+# ---------------------------------------------------------------------------
+# 2. UPLOAD LOOP
+# ---------------------------------------------------------------------------
 
 def upload_to_brain():
     json_files = list(JSON_MAP_DIR.glob("*.json"))
     print(f"Loading {len(json_files)} contract maps into the vector database...")
 
+    total_pages  = 0
+    failed_pages = 0
+
     for json_file in json_files:
-        with open(json_file, 'r') as f:
+        with open(json_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-        
-        file_name = data['file_name']
+
+        file_name = data["file_name"]
         print(f"Indexing: {file_name}")
 
-        for page in data['pages']:
+        for page in data["pages"]:
             # Group all text on the page into one searchable chunk
-            page_text = " ".join([line['content'] for line in page['lines']])
-            
+            page_text = " ".join([line["content"] for line in page["lines"]])
+
             if not page_text.strip():
                 continue
 
-            # 2. THE TRANSLATION (Embedding)
-            # This converts legal sentences into a 1536-dimensional coordinate
+            total_pages += 1
             try:
-                emb_res = client.embeddings.create(
-                    input=page_text, 
-                    model="text-embedding-3-small"
-                )
-                vector = emb_res.data[0].embedding
+                # --- Gemini embedding (768-dim) ---
+                vector = embed_client.embed(page_text, task_type="RETRIEVAL_DOCUMENT")
 
-                # 3. THE BACKPACK (Metadata)
-                # We save the coordinates so we can draw the red box later
                 metadata = {
-                    "file_name": file_name,
-                    "page_number": page['page_number'],
-                    "text": page_text[:2000], # Pinecone metadata limit safety
-                    "coords": json.dumps(page['lines'][0]['bounding_box']) 
+                    "file_name":   file_name,
+                    "page_number": page["page_number"],
+                    "text":        page_text[:2000],  # Pinecone metadata size safety
+                    "coords":      json.dumps(page["lines"][0]["bounding_box"])
+                                   if page.get("lines") else "[]",
                 }
 
-                # 4. THE STORAGE (Upsert)
                 unique_id = f"{file_name}_p{page['page_number']}"
                 index.upsert(vectors=[(unique_id, vector, metadata)])
-                
-                # Small delay to respect OpenAI Tier 1 limits
-                time.sleep(0.05) 
+
+                # Small delay to stay within Gemini free-tier rate limits
+                time.sleep(0.05)
 
             except Exception as e:
-                print(f"Error on {file_name} page {page['page_number']}: {e}")
+                failed_pages += 1
+                print(f"  [ERROR] {file_name} page {page['page_number']}: {e}")
 
-    print("\n--- DAY 2 SUCCESS: 510 CONTRACTS ARE SEARCHABLE ---")
+    print(f"\n--- INDEXING COMPLETE ---")
+    print(f"  Pages indexed : {total_pages - failed_pages}/{total_pages}")
+    if failed_pages:
+        print(f"  Pages failed  : {failed_pages} (check logs above)")
+
 
 if __name__ == "__main__":
     upload_to_brain()

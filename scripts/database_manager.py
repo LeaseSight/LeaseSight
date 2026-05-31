@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from dotenv import load_dotenv
 from pinecone import Pinecone
+from scripts.gemini_client import GeminiEmbeddingClient
 
 # --- IMPORT FALLBACK ---
 sys.path.append(os.path.join(os.getcwd(), "scripts"))
@@ -93,19 +94,11 @@ def commit_to_knowledge_base(file_name, source_path=None, dest_folder=None, vect
         # Auto-generate vector IDs if not provided
         # Vectors are stored as "{file_name}_p{page_number}"
         if not vector_ids:
-            # Query Pinecone to discover all vectors for this file
-            # We use a dummy vector query with metadata filter
-            from openai import OpenAI
-            oai = OpenAI(
-                api_key=os.getenv("OPENAI_API_KEY"),
-                base_url=os.getenv("OPENAI_PROXY_URL") or "https://api.openai.com/v1"
-            )
-            emb = oai.embeddings.create(
-                input=["contract document"],
-                model="text-embedding-3-small"
-            )
+            # Discover all vectors for this file via a query embedding
+            _embed = GeminiEmbeddingClient()
+            dummy_vec = _embed.embed_query("contract document")
             query_results = idx.query(
-                vector=emb.data[0].embedding,
+                vector=dummy_vec,
                 top_k=50,
                 filter={"file_name": {"$eq": file_name}},
                 include_metadata=False

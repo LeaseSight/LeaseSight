@@ -22,8 +22,8 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from azure.ai.formrecognizer import DocumentAnalysisClient
 from azure.core.credentials import AzureKeyCredential
-from openai import OpenAI
 from pinecone import Pinecone
+from scripts.gemini_client import GeminiChatClient, GeminiEmbeddingClient
 
 # ReportLab for PDF Export
 from reportlab.lib.pagesizes import letter
@@ -98,16 +98,17 @@ def init_local_tables():
 init_local_tables()
 
 async def get_api_keys(request: Request) -> AuthKeys:
-    openai_key = (
-        request.headers.get("X-OpenAI-Key")
-        or request.headers.get("X-API-Key")
-        or os.getenv("OPENAI_API_KEY")
+    # gemini_key sourced from server env only (BYOK flow may pass X-Gemini-Key in future)
+    gemini_key   = (
+        request.headers.get("X-Gemini-Key")
+        or os.getenv("GEMINI_API_KEY")
+        or os.getenv("MANAGED_GEMINI_KEY")
     )
-    pinecone_key = os.getenv("PINECONE_API_KEY")
-    azure_key = os.getenv("AZURE_KEY")
+    pinecone_key   = os.getenv("PINECONE_API_KEY")
+    azure_key      = os.getenv("AZURE_KEY")
     azure_endpoint = os.getenv("AZURE_ENDPOINT")
     return AuthKeys(
-        openai_key=clean_secret(openai_key),
+        openai_key=clean_secret(gemini_key),   # field reused; stores Gemini key
         pinecone_key=clean_secret(pinecone_key),
         azure_key=clean_secret(azure_key),
         azure_endpoint=clean_secret(azure_endpoint),
@@ -140,9 +141,11 @@ async def remove_cors_headers(request: Request, call_next):
 async def health():
     return {
         "status": "ULTRA_HEALTHY",
-        "version": "1.3.1",
-        "last_sync": "2026-05-10 01:21:00",
-        "proxy": os.environ.get("OPENAI_BASE_URL")
+        "version": "2.0.0-gemini",
+        "last_sync": "2026-05-31 00:00:00",
+        "llm_backend": "gemini-2.5-pro-preview",
+        "embedding_model": "text-embedding-004",
+        "embedding_dim": 768,
     }
 
 @app.get("/api/v1/evaluation")
@@ -163,9 +166,12 @@ async def get_evaluation_summary():
 @app.api_route("/api/test-connection", methods=["GET", "POST", "OPTIONS"])
 async def test_connection(keys: AuthKeys = Depends(get_api_keys)):
     try:
-        client = OpenAI(api_key=keys.openai_key, base_url="https://api.openai-proxy.com/v1")
-        client.models.list()
-        return {"success": True, "status": "success", "message": "OpenAI connection verified"}
+        # Validate the Gemini key by creating a lightweight client
+        client = GeminiChatClient(api_key=keys.openai_key)  # openai_key slot holds Gemini key
+        # A simple embed call is faster than a chat round-trip for health checks
+        embed = GeminiEmbeddingClient(api_key=keys.openai_key)
+        embed.embed("connection test", task_type="SEMANTIC_SIMILARITY")
+        return {"success": True, "status": "success", "message": "Gemini connection verified"}
     except Exception as e:
         return {"success": False, "status": "error", "message": str(e)}
 
@@ -181,14 +187,12 @@ async def contact(payload: ContactPayload):
     conn.close()
     return {"status": "success", "message": "Contact request received"}
 
-def _collect_live_evaluation_chunks(file_name: str, openai_client: OpenAI, pinecone_index) -> List[str]:
+def _collect_live_evaluation_chunks(file_name: str, embed_client: GeminiEmbeddingClient, pinecone_index) -> List[str]:
     chunks = []
     try:
-        res = openai_client.embeddings.create(
-            input=["Lease compliance audit summary, critical clauses, obligations, risk warnings"],
-            model="text-embedding-3-small",
+        query_vector = embed_client.embed_query(
+            "Lease compliance audit summary, critical clauses, obligations, risk warnings"
         )
-        query_vector = res.data[0].embedding
         results = pinecone_index.query(
             vector=query_vector,
             top_k=8,
@@ -298,11 +302,12 @@ def _latest_live_evaluation(file_name: str) -> Optional[Dict[str, Any]]:
 def _run_background_live_verification(
     task_id: str,
     file_names: List[str],
-    openai_key: str,
+    gemini_key: str,
     pinecone_key: str,
 ):
-    openai_client = OpenAI(api_key=openai_key, base_url=os.environ["OPENAI_BASE_URL"])
-    pc = Pinecone(api_key=pinecone_key)
+    gemini_client = GeminiChatClient(api_key=gemini_key)
+    embed_client  = GeminiEmbeddingClient(api_key=gemini_key)
+    pc    = Pinecone(api_key=pinecone_key)
     index = pc.Index("leasesight-index")
     live_eval_query = (
         "Evaluate whether this generated lease clause analysis is grounded in the "
@@ -324,14 +329,14 @@ def _run_background_live_verification(
 
             report = run_full_audit(
                 file_name,
-                openai_client=openai_client,
+                gemini_client=gemini_client,
                 pinecone_index=index,
             )
             if not report or report.get("error"):
                 raise RuntimeError(report.get("error") if isinstance(report, dict) else "Audit report was empty.")
 
             generated_output = _audit_report_to_text(report)
-            retrieved_chunks = _collect_live_evaluation_chunks(file_name, openai_client, index)
+            retrieved_chunks = _collect_live_evaluation_chunks(file_name, embed_client, index)
             scores = evaluate_live_document(
                 user_query=live_eval_query,
                 generated_output=generated_output,
@@ -484,11 +489,12 @@ async def start_audit(request: dict, keys: AuthKeys = Depends(get_api_keys)):
         file_name = request.get("file_name")
         if not file_name: return {"error": "file_name required", "findings": [], "obligations": []}
         
-        openai_client = OpenAI(api_key=keys.openai_key, base_url="https://api.openai-proxy.com/v1")
-        pc = Pinecone(api_key=keys.pinecone_key)
+        gemini_client = GeminiChatClient(api_key=keys.openai_key)  # openai_key slot holds Gemini key
+        embed_client  = GeminiEmbeddingClient(api_key=keys.openai_key)
+        pc    = Pinecone(api_key=keys.pinecone_key)
         index = pc.Index("leasesight-index")
         
-        report = run_full_audit(file_name, openai_client=openai_client, pinecone_index=index)
+        report = run_full_audit(file_name, gemini_client=gemini_client, pinecone_index=index)
         if not report: report = {"findings": [], "risk_score": 0}
         
         report.setdefault("findings", [])
@@ -497,7 +503,7 @@ async def start_audit(request: dict, keys: AuthKeys = Depends(get_api_keys)):
             "Evaluate whether this lease compliance audit is faithful to the retrieved "
             "contract text and relevant to identifying key lease terms, obligations, and risks."
         )
-        live_eval_chunks = _collect_live_evaluation_chunks(file_name, openai_client, index)
+        live_eval_chunks = _collect_live_evaluation_chunks(file_name, embed_client, index)
         live_trust_scores = evaluate_live_document(
             user_query=live_eval_query,
             generated_output=_audit_report_to_text(report),
@@ -544,23 +550,24 @@ async def start_audit(request: dict, keys: AuthKeys = Depends(get_api_keys)):
 @app.post("/api/upload")
 async def start_migration(background_tasks: BackgroundTasks, files: List[UploadFile] = File(None, alias="file"), keys: AuthKeys = Depends(get_api_keys)):
     if not files: raise HTTPException(status_code=422, detail="No files")
-    if not keys.openai_key:
-        raise HTTPException(status_code=401, detail="OpenAI API key is missing. Add it in settings or configure OPENAI_API_KEY on the server.")
+    if not keys.openai_key:  # openai_key slot holds Gemini key
+        raise HTTPException(status_code=401, detail="Gemini API key is missing. Configure GEMINI_API_KEY on the server.")
     if not keys.pinecone_key:
         raise HTTPException(status_code=401, detail="Pinecone API key is missing. Add it in settings or configure PINECONE_API_KEY on the server.")
     if not keys.azure_key or not keys.azure_endpoint:
         raise HTTPException(status_code=401, detail="Azure Document Intelligence credentials are missing. Add them in settings or configure AZURE_KEY and AZURE_ENDPOINT on the server.")
 
     try:
-        task_id = str(uuid.uuid4())[:8]
+        task_id    = str(uuid.uuid4())[:8]
         file_names = [os.path.basename(f.filename) for f in files]
         for file in files:
             target = os.path.join(RAW_PDF_DIR, os.path.basename(file.filename))
             with open(target, "wb") as f:
                 f.write(await file.read())
 
-        openai_client = OpenAI(api_key=keys.openai_key, base_url=os.environ["OPENAI_BASE_URL"])
-        pc = Pinecone(api_key=keys.pinecone_key)
+        gemini_client = GeminiChatClient(api_key=keys.openai_key)
+        embed_client  = GeminiEmbeddingClient(api_key=keys.openai_key)
+        pc    = Pinecone(api_key=keys.pinecone_key)
         index = pc.Index("leasesight-index")
         azure_client = DocumentAnalysisClient(
             endpoint=keys.azure_endpoint,
@@ -571,19 +578,24 @@ async def start_migration(background_tasks: BackgroundTasks, files: List[UploadF
             for name in file_names:
                 path = os.path.join(RAW_PDF_DIR, name)
                 try:
-                    process_new_pdf(path, name, openai_client=openai_client, pinecone_index=index, azure_client=azure_client)
+                    process_new_pdf(
+                        path, name,
+                        embed_client=embed_client,
+                        pinecone_index=index,
+                        azure_client=azure_client,
+                    )
                     print(f"[UPLOAD] Indexed {name}")
                 except Exception as e:
                     print(f"[UPLOAD] Indexing failed for {name}: {e}")
 
-        processor = UniversalProcessor(openai_client, index, None)
+        processor = UniversalProcessor(gemini_client, index, None)
         background_tasks.add_task(index_uploaded_files)
         background_tasks.add_task(processor.process_batch, task_id, file_names)
         background_tasks.add_task(
             _run_background_live_verification,
             task_id,
             file_names,
-            keys.openai_key,
+            keys.openai_key,   # Gemini key stored in openai_key slot
             keys.pinecone_key,
         )
         return {

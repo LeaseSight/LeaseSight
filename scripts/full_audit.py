@@ -1,19 +1,21 @@
 # scripts/full_audit.py
 # Multi-Agent Orchestration: Miner → Judge → Clerk
+# Migrated from OpenAI (gpt-4o / text-embedding-3-small)
+#             to Gemini (gemini-2.5-pro-preview / text-embedding-004)
 
 import os
 import json
 import re
 import time
 from pathlib import Path
-from openai import OpenAI
-from pinecone import Pinecone
+
+from scripts.gemini_client import GeminiChatClient, GeminiEmbeddingClient
 
 # --- CONTEXT LIMIT SAFETY ---
 CONTEXT_CHAR_LIMIT = 15000
 
 # ============================================================================
-# AGENT PROMPTS
+# AGENT PROMPTS  (identical contracts – only the LLM backend changes)
 # ============================================================================
 
 MINER_PROMPT = """
@@ -84,44 +86,36 @@ Return JSON only with this shape:
 
 def _is_rate_limit_error(error_text):
     text = str(error_text).lower()
-    return "429" in text or "too many requests" in text or "rate limit" in text or "openresty" in text
+    return (
+        "429" in text
+        or "too many requests" in text
+        or "rate limit" in text
+        or "quota" in text
+        or "resource exhausted" in text
+    )
 
 def _public_error_message(error_text):
     if _is_rate_limit_error(error_text):
         return "AI service is temporarily rate-limited. A conservative partial audit was generated from indexed document text."
     return "AI audit service was unavailable. A conservative partial audit was generated from indexed document text."
 
-def _call_agent(system_prompt, user_content, agent_name="Agent", openai_client=None, attempts=3):
-    """Shared helper to call an LLM agent with JSON output."""
-    if not openai_client:
-        raise RuntimeError(f"{agent_name}: OpenAI client missing")
+def _call_agent(system_prompt, user_content, agent_name="Agent", gemini_client=None, attempts=3):
+    """Shared helper to call a Gemini agent with JSON output.
+    
+    Signature-compatible with the former OpenAI _call_agent so existing
+    call-sites need only rename the keyword argument openai_client → gemini_client.
+    """
+    if not gemini_client:
+        raise RuntimeError(f"{agent_name}: Gemini client missing")
 
-    last_error = None
-    for attempt in range(attempts):
-        try:
-            response = openai_client.chat.completions.create(
-                model=os.getenv("AUDIT_MODEL", "gpt-4o-mini"),
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content}
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.1,
-            )
-            content = response.choices[0].message.content
-            if not content:
-                raise RuntimeError(f"{agent_name}: Empty response from AI")
-            return json.loads(content)
-        except Exception as e:
-            last_error = e
-            print(f"[{agent_name}] attempt {attempt + 1}/{attempts} failed: {str(e)[:300]}")
-            if attempt < attempts - 1 and _is_rate_limit_error(e):
-                time.sleep(8 * (attempt + 1))
-                continue
-            if attempt < attempts - 1:
-                time.sleep(2 * (attempt + 1))
-                continue
-            raise RuntimeError(_public_error_message(last_error))
+    # Delegate retry logic to GeminiChatClient (has its own exponential backoff).
+    # We honour `attempts` here as an override if needed.
+    client = GeminiChatClient(max_retries=attempts) if not isinstance(gemini_client, GeminiChatClient) else gemini_client
+
+    try:
+        return client.complete_json(system_prompt, user_content, agent_name)
+    except Exception as exc:
+        raise RuntimeError(_public_error_message(exc)) from exc
 
 def _first_match(patterns, text):
     for pattern in patterns:
@@ -131,6 +125,24 @@ def _first_match(patterns, text):
             quote = " ".join(match.group(0).split())
             return value[:180], quote[:500]
     return "Not Found", "Not Found"
+
+def _context_from_json_map(target_file):
+    json_path = Path(__file__).resolve().parents[1] / "data" / "json_maps" / f"{target_file}.json"
+    if not json_path.exists():
+        return ""
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        pages = []
+        for page in data.get("pages", []):
+            page_number = page.get("page_number", "?")
+            text = " ".join(line.get("content", "") for line in page.get("lines", []))
+            if text.strip():
+                pages.append(f"Page {page_number}: {text}")
+        return "\n".join(pages)
+    except Exception as e:
+        print(f"[AUDIT] Could not load JSON map context for {target_file}: {e}")
+        return ""
 
 def _fallback_audit(context_text, target_file, warning=None):
     text = " ".join((context_text or "").split())
@@ -178,24 +190,6 @@ def _fallback_audit(context_text, target_file, warning=None):
         ],
     }
 
-def _context_from_json_map(target_file):
-    json_path = Path(__file__).resolve().parents[1] / "data" / "json_maps" / f"{target_file}.json"
-    if not json_path.exists():
-        return ""
-    try:
-        with open(json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        pages = []
-        for page in data.get("pages", []):
-            page_number = page.get("page_number", "?")
-            text = " ".join(line.get("content", "") for line in page.get("lines", []))
-            if text.strip():
-                pages.append(f"Page {page_number}: {text}")
-        return "\n".join(pages)
-    except Exception as e:
-        print(f"[AUDIT] Could not load JSON map context for {target_file}: {e}")
-        return ""
-
     findings = []
     for label, label_patterns in patterns.items():
         value, quote = _first_match(label_patterns, text)
@@ -231,9 +225,9 @@ def _context_from_json_map(target_file):
 def _normalize_report(report, target_file):
     if not isinstance(report, dict):
         report = {}
-    findings = report.get("findings") or []
+    findings    = report.get("findings")    or []
     obligations = report.get("obligations") or []
-    warnings = report.get("warnings") or []
+    warnings    = report.get("warnings")    or []
 
     clean_warnings = []
     for warning in warnings:
@@ -244,14 +238,14 @@ def _normalize_report(report, target_file):
             clean_warnings.append(text)
 
     for item in findings:
-        item.setdefault("label", "Finding")
-        item.setdefault("value", "Not Found")
+        item.setdefault("label",          "Finding")
+        item.setdefault("value",          "Not Found")
         item.setdefault("evidence_quote", "Not Found")
-        item.setdefault("risk_level", "Medium")
+        item.setdefault("risk_level",     "Medium")
     for item in obligations:
-        item.setdefault("label", "Obligation")
-        item.setdefault("date", "Not Found")
-        item.setdefault("description", item.get("value", ""))
+        item.setdefault("label",          "Obligation")
+        item.setdefault("date",           "Not Found")
+        item.setdefault("description",    item.get("value", ""))
         item.setdefault("evidence_quote", "Not Found")
 
     summary = report.get("summary_paragraph") or report.get("summary") or ""
@@ -259,81 +253,119 @@ def _normalize_report(report, target_file):
         summary = "Lease audit completed. Review the extracted fields and source evidence before committing this document to the knowledge base."
 
     return {
-        "lease_metadata": report.get("lease_metadata") or {"title": target_file},
-        "findings": findings,
-        "obligations": obligations,
+        "lease_metadata":    report.get("lease_metadata") or {"title": target_file},
+        "findings":          findings,
+        "obligations":       obligations,
         "summary_paragraph": summary,
-        "risk_score": int(report.get("risk_score") or 5),
-        "warnings": clean_warnings,
+        "risk_score":        int(report.get("risk_score") or 5),
+        "warnings":          clean_warnings,
     }
 
-def agent_miner(context_text, openai_client):
+# ============================================================================
+# AGENT ENTRY POINTS
+# ============================================================================
+
+def agent_miner(context_text, gemini_client):
     print("[MINER] Extracting data points...")
     truncated = (context_text or "")[:CONTEXT_CHAR_LIMIT]
-    result = _call_agent(MINER_PROMPT, f"Extract from:\n\n{truncated}", "MINER", openai_client)
-    return result
+    return _call_agent(MINER_PROMPT, f"Extract from:\n\n{truncated}", "MINER", gemini_client)
 
-def agent_judge(miner_output, market_context, openai_client):
+def agent_judge(miner_output, market_context, gemini_client):
     print("[JUDGE] Reviewing for red flags...")
     input_data = json.dumps({"findings": miner_output, "market_context": market_context})
-    result = _call_agent(JUDGE_PROMPT, f"Review:\n\n{input_data}", "JUDGE", openai_client)
-    return result
+    return _call_agent(JUDGE_PROMPT, f"Review:\n\n{input_data}", "JUDGE", gemini_client)
 
-def agent_clerk(miner_output, judge_output, openai_client):
+def agent_clerk(miner_output, judge_output, gemini_client):
     print("[CLERK] Synthesizing report...")
     combined = json.dumps({"miner": miner_output, "judge": judge_output})
-    result = _call_agent(CLERK_PROMPT, f"Synthesize:\n\n{combined}", "CLERK", openai_client)
-    return result
+    return _call_agent(CLERK_PROMPT, f"Synthesize:\n\n{combined}", "CLERK", gemini_client)
 
 # ============================================================================
 # MAIN ORCHESTRATOR
 # ============================================================================
 
-def run_full_audit(target_file, openai_client=None, pinecone_index=None):
+def run_full_audit(target_file, gemini_client=None, pinecone_index=None,
+                   # Legacy keyword kept for backwards-compatibility; ignored
+                   openai_client=None):
+    """
+    Run the full Miner→Judge→Clerk audit pipeline.
+
+    Parameters
+    ----------
+    target_file    : str   – PDF file name (used to locate JSON map / Pinecone filter)
+    gemini_client  : GeminiChatClient | None – injected by API; auto-created if None
+    pinecone_index : pinecone.Index  | None
+    openai_client  : (deprecated) accepted but ignored for backwards compat
+    """
     try:
-        if not openai_client or not pinecone_index:
-            return {"error": "Clients not initialized correctly"}
+        # Auto-initialise clients when called standalone (scripts/)
+        if gemini_client is None:
+            gemini_client = GeminiChatClient()
+
+        embed_client = GeminiEmbeddingClient()
+
+        if not pinecone_index:
+            return {"error": "Pinecone index not initialised"}
 
         print(f"--- STARTING AUDIT: {target_file} ---")
 
-        # 1. Retrieval: prefer the exact Azure JSON map for the selected PDF.
-        # Pinecone remains a fallback for older documents without spatial maps.
+        # 1. Prefer the exact JSON spatial map for the selected PDF.
         context = _context_from_json_map(target_file)
         vec = None
         if not context:
             try:
-                res = openai_client.embeddings.create(input=["Lease terms, parties, rent"], model="text-embedding-3-small")
-                vec = res.data[0].embedding
-                results = pinecone_index.query(vector=vec, top_k=15, filter={"file_name": {"$eq": target_file}}, include_metadata=True)
-                if results['matches']:
-                    context = "\n".join([f"Page {m['metadata'].get('page_number', '?')}: {m['metadata'].get('text', '')}" for m in results['matches']])
+                vec = embed_client.embed_query("Lease terms, parties, rent")
+                results = pinecone_index.query(
+                    vector=vec,
+                    top_k=15,
+                    filter={"file_name": {"$eq": target_file}},
+                    include_metadata=True,
+                )
+                if results["matches"]:
+                    context = "\n".join([
+                        f"Page {m['metadata'].get('page_number', '?')}: {m['metadata'].get('text', '')}"
+                        for m in results["matches"]
+                    ])
             except Exception as e:
                 print(f"[AUDIT] Pinecone retrieval skipped: {str(e)[:300]}")
 
         if not context:
-            return _fallback_audit("", target_file, f"No indexed text found for {target_file}. Upload indexing may still be in progress.")
+            return _fallback_audit(
+                "", target_file,
+                f"No indexed text found for {target_file}. Upload indexing may still be in progress."
+            )
 
         # 2. Market Precedents
         market_context = "No market precedents found."
         try:
-            if vec:
-                m_res = pinecone_index.query(vector=vec, top_k=5, filter={"file_name": {"$ne": target_file}}, include_metadata=True)
-            else:
-                m_res = {"matches": []}
-            if m_res.get('matches'):
-                market_context = "\n".join([m['metadata'].get('text', '') for m in m_res['matches']])
-        except: pass
+            if vec is None:
+                vec = embed_client.embed_query("Lease terms, parties, rent")
+            m_res = pinecone_index.query(
+                vector=vec,
+                top_k=5,
+                filter={"file_name": {"$ne": target_file}},
+                include_metadata=True,
+            )
+            if m_res.get("matches"):
+                market_context = "\n".join([
+                    m["metadata"].get("text", "") for m in m_res["matches"]
+                ])
+        except Exception:
+            pass
 
+        # 3. Single-pass AUDIT_PROMPT (faster than 3-agent pipeline; 3-agent
+        #    is kept as agent_miner/judge/clerk for callers who need it)
         try:
             payload = json.dumps({
                 "document_name": target_file,
-                "lease_text": context[:CONTEXT_CHAR_LIMIT],
+                "lease_text":    context[:CONTEXT_CHAR_LIMIT],
                 "market_context": market_context[:5000],
             })
-            final_report = _call_agent(AUDIT_PROMPT, payload, "AUDIT", openai_client, attempts=4)
+            final_report = _call_agent(AUDIT_PROMPT, payload, "AUDIT", gemini_client, attempts=4)
             return _normalize_report(final_report, target_file)
         except Exception as e:
             print(f"[AUDIT] Falling back after error: {str(e)}")
             return _fallback_audit(context, target_file, str(e))
+
     except Exception as e:
         return _fallback_audit("", target_file, f"Audit pipeline could not complete: {str(e)}")
