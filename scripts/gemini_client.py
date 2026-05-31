@@ -12,23 +12,27 @@
 #   result = chat.complete_json(system_prompt, user_content, "MINER")
 
 import os
+from dotenv import load_dotenv
+load_dotenv(override=True)
+os.environ["GOOGLE_API_KEY"] = os.getenv("GEMINI_API_KEY", "")
+
 import time
 import json
 import re
 import logging
 from typing import Any, Dict, List, Optional
 
-from dotenv import load_dotenv
-
 # Load .env from workspace root and api/ (api/.env takes precedence for prod secrets)
 _ROOT_ENV = os.path.join(os.path.dirname(__file__), "..", ".env")
 _API_ENV  = os.path.join(os.path.dirname(__file__), "..", "api", ".env")
-load_dotenv(_ROOT_ENV)
-load_dotenv(_API_ENV)
+load_dotenv(_ROOT_ENV, override=True)
+load_dotenv(_API_ENV, override=True)
+os.environ["GOOGLE_API_KEY"] = os.getenv("GEMINI_API_KEY", "")
 
 try:
     from google import genai
     from google.genai import types as genai_types
+    from google.oauth2.credentials import Credentials
     _GENAI_AVAILABLE = True
 except ImportError:
     _GENAI_AVAILABLE = False
@@ -79,6 +83,20 @@ def _strip_json_fence(text: str) -> str:
     return text.strip()
 
 
+def _clean_secret(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return value
+    return value.strip().strip('"').strip("'")
+
+
+def _looks_like_ai_studio_key(value: str) -> bool:
+    return value.startswith("AIza")
+
+
+def _looks_like_oauth_token(value: str) -> bool:
+    return value.startswith("AQ.")
+
+
 # ---------------------------------------------------------------------------
 # GeminiChatClient  (reasoning / audit tasks only)
 # ---------------------------------------------------------------------------
@@ -107,11 +125,48 @@ class GeminiChatClient:
             raise ImportError(
                 "google-genai is not installed. Run: pip install google-genai"
             )
-        self._api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("MANAGED_GEMINI_KEY")
+        self._api_key = _clean_secret(api_key or os.getenv("GEMINI_API_KEY") or os.getenv("MANAGED_GEMINI_KEY"))
         if not self._api_key:
             raise ValueError("GEMINI_API_KEY not found in environment.")
 
-        self._client      = genai.Client(api_key=self._api_key)
+        os.environ["GEMINI_API_KEY"] = self._api_key
+        os.environ["GOOGLE_API_KEY"] = self._api_key
+        self._auth_mode = "vertex_oauth" if _looks_like_oauth_token(self._api_key) else "ai_studio_api_key"
+        if self._auth_mode == "vertex_oauth":
+            project = (
+                os.getenv("GOOGLE_CLOUD_PROJECT")
+                or os.getenv("GEMINI_PROJECT_ID")
+                or os.getenv("GOOGLE_PROJECT_ID")
+            )
+            location = os.getenv("GOOGLE_CLOUD_LOCATION") or os.getenv("GEMINI_LOCATION") or "us-central1"
+            if not project:
+                raise ValueError(
+                    "GEMINI_API_KEY starts with 'AQ.', so it looks like an OAuth/Vertex access token. "
+                    "Set GOOGLE_CLOUD_PROJECT or GEMINI_PROJECT_ID in .env to use Vertex Gemini, "
+                    "or replace GEMINI_API_KEY with a standard AI Studio key that starts with 'AIza'."
+                )
+            credentials = Credentials(token=self._api_key)
+            self._client = genai.Client(
+                vertexai=True,
+                credentials=credentials,
+                project=project,
+                location=location,
+                http_options=genai_types.HttpOptions(
+                    api_version=os.getenv("GEMINI_VERTEX_API_VERSION", "v1"),
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    timeout=int(os.getenv("GEMINI_TIMEOUT_MS", "30000")),
+                ),
+            )
+        else:
+            if not _looks_like_ai_studio_key(self._api_key):
+                logger.warning(
+                    "[GeminiChatClient] GEMINI_API_KEY does not look like a standard AI Studio key. "
+                    "Trying api_key auth anyway."
+                )
+            self._client = genai.Client(
+                api_key=self._api_key,
+                http_options=genai_types.HttpOptions(timeout=int(os.getenv("GEMINI_TIMEOUT_MS", "30000"))),
+            )
         self._model_name  = model or os.getenv("AUDIT_MODEL", CHAT_MODEL)
         self._temperature = temperature
         self._max_retries = max_retries
@@ -182,6 +237,21 @@ class GeminiChatClient:
                 ) from exc
 
         raise RuntimeError(f"{agent_name}: Exceeded {self._max_retries} retries.")
+
+    def smoke_test(self) -> str:
+        """Perform a real Gemini generation call for connection diagnostics."""
+        response = self._client.models.generate_content(
+            model=self._model_name,
+            contents="Reply with the word ok.",
+            config=genai_types.GenerateContentConfig(
+                temperature=0,
+                max_output_tokens=8,
+            ),
+        )
+        text = (response.text or "").strip()
+        if not text:
+            raise RuntimeError("Gemini smoke test returned an empty response.")
+        return text
 
 
 def _get_mock_response(agent_name: str, user_content: str) -> Dict[str, Any]:

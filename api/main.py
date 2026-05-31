@@ -1,10 +1,15 @@
-import os, sys, json, sqlite3, uuid, hashlib, io, time
+import os
+from dotenv import load_dotenv
+load_dotenv(override=True)
+os.environ["GOOGLE_API_KEY"] = os.getenv("GEMINI_API_KEY", "")
+
+import sys, json, sqlite3, uuid, hashlib, io, time
 # 1. HARDENED PATH RESOLUTION
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, BASE_DIR)
-from dotenv import load_dotenv
-load_dotenv(os.path.join(BASE_DIR, ".env"))
-load_dotenv(os.path.join(BASE_DIR, "api", ".env"))
+load_dotenv(os.path.join(BASE_DIR, ".env"), override=True)
+load_dotenv(os.path.join(BASE_DIR, "api", ".env"), override=True)
+os.environ["GOOGLE_API_KEY"] = os.getenv("GEMINI_API_KEY", "")
 
 def clean_secret(value):
     if not value:
@@ -112,11 +117,9 @@ def init_local_tables():
 init_local_tables()
 
 async def get_api_keys(request: Request) -> AuthKeys:
-    # gemini_key sourced from server env only (BYOK flow may pass X-Gemini-Key in future)
+    # Server-managed credentials only. Browser/BYOK headers are intentionally ignored.
     gemini_key   = (
-        request.headers.get("X-Gemini-Key")
-        or request.headers.get("X-OpenAI-Key")
-        or os.getenv("GEMINI_API_KEY")
+        os.getenv("GEMINI_API_KEY")
         or os.getenv("MANAGED_GEMINI_KEY")
     )
     pinecone_key   = os.getenv("PINECONE_API_KEY")
@@ -178,10 +181,18 @@ async def get_evaluation_summary():
 @app.api_route("/api/test-connection", methods=["GET", "POST", "OPTIONS"])
 async def test_connection(keys: AuthKeys = Depends(get_api_keys)):
     try:
-        # Validate connection with a lightweight local embedding test
-        client = GeminiChatClient(api_key=keys.openai_key)  # openai_key slot holds Gemini key
+        if not keys.openai_key:
+            return {"success": False, "status": "error", "message": "GEMINI_API_KEY is missing on the server."}
+
+        client = GeminiChatClient(api_key=keys.openai_key, max_retries=1)  # openai_key slot holds Gemini key
+        gemini_reply = client.smoke_test()
         get_local_embedding("connection test")  # warms up local model, no API call
-        return {"success": True, "status": "success", "message": "Gemini connection verified (local embedding)"}
+        return {
+            "success": True,
+            "status": "success",
+            "message": "Gemini and local embedding verified",
+            "gemini_reply": gemini_reply,
+        }
     except Exception as e:
         return {"success": False, "status": "error", "message": str(e)}
 
