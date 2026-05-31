@@ -691,8 +691,6 @@ async def start_migration(
             except Exception as e:
                 print(f"[UPLOAD] Entity extraction skipped for task {task_id}: {e}", flush=True)
 
-        # Native OS thread to bypass dynamic asynchronous anyio thread pool issues on Windows
-        import threading
         def run_full_pipeline():
             print(f"[BACKGROUND] Starting pipeline for batch {task_id}", flush=True)
             try:
@@ -721,11 +719,12 @@ async def start_migration(
                 print(f"[BACKGROUND] Live verification failed: {e}", flush=True)
             print(f"[BACKGROUND] Pipeline completed for batch {task_id}", flush=True)
 
-        thread = threading.Thread(target=run_full_pipeline, daemon=True)
-        thread.start()
+        background_tasks.add_task(run_full_pipeline)
         return {
             "status": "success",
+            "message": "File uploaded and queued for processing",
             "task_id": task_id,
+            "filename": file_names[0],
             "file_name": file_names[0],
             "files": file_names,
             "live_evaluation": {
