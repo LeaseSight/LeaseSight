@@ -11,6 +11,7 @@ import { FindingCard } from './FindingCard';
 import { CommitModal } from './CommitModal';
 import { ObligationTimeline } from './ObligationTimeline';
 import { AuditSkeleton } from './AuditSkeleton';
+import { FileUploadStatus } from './FileUploadStatus';
 
 interface LeftPaneProps {
   selectedDoc: string | null;
@@ -36,6 +37,8 @@ export function LeftPane({
   const [committed, setCommitted] = useState(false);
   const [isIndexing, setIsIndexing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [pipelineStatus, setPipelineStatus] = useState<string | null>(null);
+  const [pipelineError, setPipelineError] = useState<string | undefined>();
   const [auditStatus, setAuditStatus] = useState('Analyzing Clauses...');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const statusCycleRef = useRef<NodeJS.Timeout | null>(null);
@@ -64,11 +67,35 @@ export function LeftPane({
     const file = e.target.files?.[0];
     if (!file) return;
     setIsUploading(true);
+    setPipelineStatus(null);
+    setPipelineError(undefined);
     try {
       const res = await api.upload(file);
       const docsRes = await api.documents();
       setDocuments(docsRes.documents ?? []);
       onSelectDoc(res.file_name ?? '');
+
+      if (res.live_evaluation?.status === 'QUEUED') {
+        setPipelineStatus('QUEUED');
+        const pollInterval = setInterval(async () => {
+          try {
+            const statusRes = await api.checkLiveEvaluation(res.file_name);
+            setPipelineStatus(statusRes.status);
+            
+            if (statusRes.status === 'COMPLETED') {
+              clearInterval(pollInterval);
+              const auditData = await api.audit(res.file_name);
+              onAuditComplete(auditData);
+            } else if (statusRes.status === 'FAILED') {
+              clearInterval(pollInterval);
+              setPipelineError('Extraction failed.');
+            }
+          } catch (err) {
+            clearInterval(pollInterval);
+            setPipelineStatus('FAILED');
+          }
+        }, 3000);
+      }
     } catch (error) {
       console.error('Upload failed:', error);
       showErrorToast(error, 'Upload Failed');
@@ -242,6 +269,13 @@ export function LeftPane({
           )}
         </button>
       </div>
+
+      {/* File Upload Status */}
+      {pipelineStatus && (
+        <div className="px-4 pb-2">
+          <FileUploadStatus status={pipelineStatus} error={pipelineError} />
+        </div>
+      )}
 
       {/* Scrollable Results Area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">

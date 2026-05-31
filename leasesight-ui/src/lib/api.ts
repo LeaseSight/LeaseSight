@@ -177,6 +177,9 @@ export const api = {
     return res.json();
   },
 
+  checkLiveEvaluation: (filename: string) =>
+    fetchJSON<any>(`/api/live-evaluation/${encodeURIComponent(filename)}`),
+
   checkIndex: (filename: string) =>
     fetchJSON<{ status: string; was_missing: boolean }>(`/api/index-status/${encodeURIComponent(filename)}`),
 

@@ -11,6 +11,12 @@ export interface Obligation {
   description: string;
 }
 
+export interface LiveTrustScores {
+  faithfulness: number;
+  relevance: number;
+  groundedness_index: number;
+}
+
 export interface AuditResult {
   findings: Finding[];
   obligations?: Obligation[];
@@ -18,6 +24,8 @@ export interface AuditResult {
   risk_score: number;
   warnings: string[];
   annotations: Annotation[];
+  live_trust_scores?: LiveTrustScores;
+  coordinates_json?: string;
 }
 
 export interface Annotation {
