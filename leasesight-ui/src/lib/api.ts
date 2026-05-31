@@ -1,14 +1,22 @@
 /**
  * api.ts — LeaseSight Frontend API Service v4.0
  *
- * - Free/BYOK users send only their OpenAI key.
- * - Pro/Managed users use server-side OpenAI, Azure, and Pinecone keys.
+ * - Uses server-managed Gemini, Azure, and Pinecone keys.
  * - Catches HTTP 401 responses → redirects to /settings with an "Invalid Key" toast.
  * - All other errors bubble up to the caller.
  */
 import { AuditResult, ChatResponse, LocateResponse, GraphData, HealthStatus, CommitResult, EvaluationSummary } from './types';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://api.leasesights.tech';
+function resolveApiBase() {
+  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    if (host === 'localhost' || host === '127.0.0.1') return 'http://localhost:8080';
+  }
+  return 'https://api.leasesights.tech';
+}
+
+const API_BASE = resolveApiBase();
 
 // ---------------------------------------------------------------------------
 // Global Auth Context (Set by AuthGate or on login)
@@ -72,10 +80,7 @@ export function saveSelectedTier(tier: SubscriptionTier) {
 }
 
 export function requireApiKey(): boolean {
-  const tier = getSelectedTier();
-  const isFree = tier === 'free';
-  if (!isFree) return true;
-  return hasStoredKeys();
+  return true;
 }
 
 export function getApiErrorStatus(error: unknown): number | null {
@@ -107,13 +112,6 @@ function buildKeyHeaders(): Record<string, string> {
 
   if (globalUserId) {
     headers['X-User-Id'] = globalUserId;
-  }
-
-  const selectedTier = getSelectedTier();
-  const isByok = globalTier === 'BYOK' || selectedTier === 'free';
-  const keys = getStoredKeys();
-  if (isByok && keys.openai) {
-    headers['X-OpenAI-Key'] = keys.openai;
   }
 
   return headers;

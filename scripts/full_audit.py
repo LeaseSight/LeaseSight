@@ -11,6 +11,7 @@ from pathlib import Path
 
 from scripts.gemini_client import GeminiChatClient
 from scripts.processor import get_local_embedding
+from app.core.rag_engine import retrieve_dual_namespace
 
 # --- CONTEXT LIMIT SAFETY ---
 CONTEXT_CHAR_LIMIT = 15000
@@ -286,6 +287,7 @@ def agent_clerk(miner_output, judge_output, gemini_client):
 # ============================================================================
 
 def run_full_audit(target_file, gemini_client=None, pinecone_index=None,
+                   user_id=None,
                    # Legacy keyword kept for backwards-compatibility; ignored
                    openai_client=None):
     """
@@ -314,11 +316,13 @@ def run_full_audit(target_file, gemini_client=None, pinecone_index=None,
         if not context:
             try:
                 vec = get_local_embedding("Lease terms, parties, rent")
-                results = pinecone_index.query(
-                    vector=vec,
+                results = retrieve_dual_namespace(
+                    pinecone_index=pinecone_index,
+                    query_vector=vec,
                     top_k=15,
-                    filter={"file_name": {"$eq": target_file}},
-                    include_metadata=True,
+                    file_name=target_file,
+                    user_id=user_id,
+                    include_metadata=True
                 )
                 if results["matches"]:
                     context = "\n".join([
@@ -339,11 +343,14 @@ def run_full_audit(target_file, gemini_client=None, pinecone_index=None,
         try:
             if vec is None:
                 vec = get_local_embedding("Lease terms, parties, rent")
-            m_res = pinecone_index.query(
-                vector=vec,
+            m_res = retrieve_dual_namespace(
+                pinecone_index=pinecone_index,
+                query_vector=vec,
                 top_k=5,
-                filter={"file_name": {"$ne": target_file}},
+                file_name=target_file,
+                user_id=user_id,
                 include_metadata=True,
+                exclude_file_name=True
             )
             if m_res.get("matches"):
                 market_context = "\n".join([

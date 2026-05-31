@@ -26,6 +26,7 @@ except ImportError:
 # Custom Script Imports
 from scripts.processor import process_new_pdf
 from scripts.full_audit import run_full_audit
+from app.core.rag_engine import retrieve_dual_namespace
 
 # Pinecone + OpenAI (needed for archive vector fetching)
 from dotenv import load_dotenv
@@ -111,15 +112,19 @@ def log_audit_to_excel(data_dict):
         print(f"Error logging to Excel: {e}")
 
 # --- HELPER: FETCH ARCHIVE VECTORS ---
-def fetch_archive_vectors(current_doc_name, sample_size=100):
+def fetch_archive_vectors(current_doc_name, user_id=None, sample_size=100):
     try:
         idx = get_pinecone_index()
         current_vec = st.session_state.get('current_vector')
         if not current_vec:
             return [], []
-        results = idx.query(
-            vector=current_vec, top_k=sample_size,
-            include_values=True, include_metadata=True,
+        results = retrieve_dual_namespace(
+            pinecone_index=idx,
+            query_vector=current_vec,
+            top_k=sample_size,
+            user_id=user_id,
+            include_metadata=True,
+            include_values=True,
         )
         vectors, names, seen = [], [], set()
         for match in results.get('matches', []):
@@ -217,7 +222,8 @@ def render_dynamic_audit(summary_data, selected_doc):
                         result = commit_to_knowledge_base(
                             file_name=selected_doc,
                             source_path=st.session_state.get('source_path'),
-                            vector_ids=st.session_state.get('vector_ids') or None
+                            vector_ids=st.session_state.get('vector_ids') or None,
+                            user_id=user_id
                         )
                         if result['success']:
                             st.session_state['committed'] = True
@@ -237,6 +243,7 @@ def render_dynamic_audit(summary_data, selected_doc):
 # ========================================================================
 # SIDEBAR
 # ========================================================================
+user_id = st.sidebar.text_input("👤 Tenant ID", value="default_user", help="Isolates uploaded data for multi-tenancy.")
 uploaded_file = st.sidebar.file_uploader("Upload a new Contract (PDF)", type="pdf")
 
 if uploaded_file:
@@ -245,7 +252,7 @@ if uploaded_file:
         with st.status("Processing new document..."):
             with open(target_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
-            process_new_pdf(str(target_path), uploaded_file.name)
+            process_new_pdf(str(target_path), uploaded_file.name, user_id=user_id)
             st.success("Document Indexed!")
     selected_doc = uploaded_file.name
     st.session_state['source_path'] = str(target_path)
@@ -260,7 +267,7 @@ else:
         json_map_path = JSON_MAP_DIR / f"{selected_doc}.json"
         if not json_map_path.exists():
             with st.sidebar.status("Indexing existing document..."):
-                process_new_pdf(str(target_path), selected_doc)
+                process_new_pdf(str(target_path), selected_doc, user_id=user_id)
                 st.sidebar.success("Document Indexed!")
 
 # Risk Score Metric
@@ -303,7 +310,7 @@ with col1:
         st.session_state['pdf_page'] = None
 
         with st.spinner("AI Multi-Agent pipeline running (Miner → Judge → Clerk)..."):
-            results = run_full_audit(selected_doc)
+            results = run_full_audit(selected_doc, user_id=user_id)
             st.session_state['audit_results'] = results
 
             try:
@@ -321,9 +328,12 @@ with col1:
                 idx = get_pinecone_index()
                 vec = st.session_state.get('current_vector')
                 if vec:
-                    id_results = idx.query(
-                        vector=vec, top_k=50,
-                        filter={"file_name": {"$eq": selected_doc}},
+                    id_results = retrieve_dual_namespace(
+                        pinecone_index=idx,
+                        query_vector=vec,
+                        top_k=50,
+                        file_name=selected_doc,
+                        user_id=user_id,
                         include_metadata=False,
                         include_values=True
                     )
@@ -423,7 +433,7 @@ with st.expander("📊 Similarity Analytics", expanded=True):
                 
         with tab_global:
             with st.spinner("Building 3D similarity network..."):
-                archive_vectors, archive_names = fetch_archive_vectors(selected_doc)
+                archive_vectors, archive_names = fetch_archive_vectors(selected_doc, user_id=user_id)
                 global_fig = generate_database_relationship_graph(
                     current_doc_vector=st.session_state['current_vector'],
                     archive_vectors=archive_vectors,
@@ -485,7 +495,7 @@ else:
         # Get scoped answer
         with st.chat_message("assistant"):
             with st.spinner("Searching document..."):
-                result = ask_document(user_query, selected_doc)
+                result = ask_document(user_query, selected_doc, user_id=user_id)
                 answer = result['answer']
                 source_text = result.get('source_text')
                 page = result.get('page')

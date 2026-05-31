@@ -162,7 +162,7 @@ def reindex(dry_run: bool = False):
         if not upsert_buffer:
             return
         try:
-            index.upsert(vectors=upsert_buffer)
+            index.upsert(vectors=upsert_buffer, namespace="academic_baseline")
             success_count += len(upsert_buffer)
             print(f"  [Pinecone] Upserted batch of {len(upsert_buffer):>3} | total: {success_count}")
         except Exception as e:

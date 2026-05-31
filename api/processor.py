@@ -37,7 +37,7 @@ class UniversalProcessor:
         self.gemini   = gemini_client
         self.pinecone = pinecone_index
 
-    async def process_batch(self, task_id: str, files: List[str]):
+    async def process_batch(self, task_id: str, files: List[str], user_id: str = None):
         """Background task for Surgical Entity Extraction via Gemini."""
         for file_name in files:
             try:

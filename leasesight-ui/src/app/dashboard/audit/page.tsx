@@ -37,7 +37,7 @@ export default function AuditDashboard() {
   useEffect(() => {
     if (user?.id) {
       import('@/lib/api').then(({ setApiAuthContext }) => {
-        setApiAuthContext(user.id, 'BYOK');
+        setApiAuthContext(user.id, 'Managed');
       });
     }
   }, [user?.id]);

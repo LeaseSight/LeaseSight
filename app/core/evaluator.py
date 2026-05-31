@@ -276,6 +276,7 @@ def evaluate_live_document(
     user_query: str,
     generated_output: str,
     retrieved_chunks: List[str],
+    user_id: str = None,
 ) -> Dict[str, float | bool | str]:
     try:
         deps = _load_deepeval_dependencies()

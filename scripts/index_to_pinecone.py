@@ -30,12 +30,13 @@ JSON_MAP_DIR = BASE_DIR / "data" / "json_maps"
 # 2. UPLOAD LOOP
 # ---------------------------------------------------------------------------
 
-def upload_to_brain():
+def upload_to_brain(user_id: str = None):
     json_files = list(JSON_MAP_DIR.glob("*.json"))
     print(f"Loading {len(json_files)} contract maps into the vector database...")
 
     total_pages  = 0
     failed_pages = 0
+    ns = f"user_{user_id}" if user_id else "academic_baseline"
 
     for json_file in json_files:
         with open(json_file, "r", encoding="utf-8") as f:
@@ -65,7 +66,10 @@ def upload_to_brain():
                 }
 
                 unique_id = f"{file_name}_p{page['page_number']}"
-                index.upsert(vectors=[(unique_id, vector, metadata)])
+                index.upsert(
+                    vectors=[(unique_id, vector, metadata)],
+                    namespace=ns
+                )
 
                 # Small delay to stay within Gemini free-tier rate limits
                 time.sleep(0.05)

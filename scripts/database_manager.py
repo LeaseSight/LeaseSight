@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pinecone import Pinecone
 from scripts.processor import get_local_embedding
+from app.core.rag_engine import retrieve_dual_namespace
 
 # --- IMPORT FALLBACK ---
 sys.path.append(os.path.join(os.getcwd(), "scripts"))
@@ -32,7 +33,7 @@ def _get_pinecone_index():
     return pc.Index("leasesight-index")
 
 
-def commit_to_knowledge_base(file_name, source_path=None, dest_folder=None, vector_ids=None):
+def commit_to_knowledge_base(file_name, source_path=None, dest_folder=None, vector_ids=None, user_id=None):
     """
     Commits a verified document to the permanent knowledge base.
 
@@ -96,10 +97,12 @@ def commit_to_knowledge_base(file_name, source_path=None, dest_folder=None, vect
         if not vector_ids:
             # Discover all vectors for this file via a local query embedding
             dummy_vec = get_local_embedding("contract document")
-            query_results = idx.query(
-                vector=dummy_vec,
+            query_results = retrieve_dual_namespace(
+                pinecone_index=idx,
+                query_vector=dummy_vec,
                 top_k=50,
-                filter={"file_name": {"$eq": file_name}},
+                file_name=file_name,
+                user_id=user_id,
                 include_metadata=False
             )
             vector_ids = [m['id'] for m in query_results.get('matches', [])]
@@ -112,7 +115,8 @@ def commit_to_knowledge_base(file_name, source_path=None, dest_folder=None, vect
                     set_metadata={
                         "status": "verified",
                         "category": "precedent"
-                    }
+                    },
+                    namespace=f"user_{user_id}" if user_id else "academic_baseline"
                 )
                 updated += 1
             except Exception as e:

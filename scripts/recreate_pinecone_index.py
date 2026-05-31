@@ -125,7 +125,10 @@ for json_file in json_files:
                         if page.get("lines") else []
                     ),
                 }
-                index.upsert(vectors=[(unique_id, vector, metadata)])
+                index.upsert(
+                    vectors=[(unique_id, vector, metadata)],
+                    namespace="academic_baseline"
+                )
                 total_vectors += 1
                 time.sleep(0.05)   # respect Gemini free-tier rate limits
                 break

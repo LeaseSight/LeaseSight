@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { ChevronDown, Play, AlertTriangle, CheckCircle, Database, Download, Upload } from 'lucide-react';
 import Link from 'next/link';
-import { api, requireApiKey } from '@/lib/api';
+import { api } from '@/lib/api';
 import { AuditResult, Annotation } from '@/lib/types';
 import { showErrorToast, showWarningToast } from '@/lib/errorMessages';
 import { RiskGauge } from './RiskGauge';
@@ -80,14 +80,6 @@ export function LeftPane({
 
   const handleRunAudit = async () => {
     if (!selectedDoc) return;
-
-    // Validation gating: Check if Free tier user has API key
-    if (!requireApiKey()) {
-      showWarningToast(
-        'Please add your OpenAI key in Settings to run this audit. Redirecting...'
-      );
-      return;
-    }
 
     setIsAuditing(true);
     setCommitted(false);

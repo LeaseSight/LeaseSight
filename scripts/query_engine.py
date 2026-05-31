@@ -9,6 +9,7 @@ from pinecone import Pinecone
 
 from scripts.gemini_client import GeminiChatClient
 from scripts.processor import get_local_embedding
+from app.core.rag_engine import retrieve_dual_namespace
 
 sys.path.append(os.path.join(os.getcwd(), "scripts"))
 load_dotenv()
@@ -36,6 +37,7 @@ def ask_document(
     file_name: str,
     gemini_client: GeminiChatClient = None,
     pinecone_index=None,
+    user_id: str = None,
     # Legacy kwargs accepted but ignored
     openai_client=None,
     embed_client=None,
@@ -52,10 +54,12 @@ def ask_document(
 
     try:
         query_vector = get_local_embedding(query)
-        results = pinecone_index.query(
-            vector=query_vector,
+        results = retrieve_dual_namespace(
+            pinecone_index=pinecone_index,
+            query_vector=query_vector,
             top_k=5,
-            filter={"file_name": {"$eq": file_name}},
+            file_name=file_name,
+            user_id=user_id,
             include_metadata=True,
         )
         if not results["matches"]:
@@ -84,4 +88,4 @@ def ask_document(
 
 
 if __name__ == "__main__":
-    print(ask_document("What is the governing law?", "ABILITYINC_06_15_2020-EX-4.25-SERVICES AGREEMENT.PDF"))
+    print(ask_document("What is the governing law?", "AgapeAtpCorp_20191202_10-KA_EX-10.1_11911128_EX-10.1_Supply Agreement.pdf"))

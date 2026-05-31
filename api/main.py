@@ -2,6 +2,9 @@ import os, sys, json, sqlite3, uuid, hashlib, io, time
 # 1. HARDENED PATH RESOLUTION
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, BASE_DIR)
+from dotenv import load_dotenv
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+load_dotenv(os.path.join(BASE_DIR, "api", ".env"))
 
 def clean_secret(value):
     if not value:
@@ -19,12 +22,14 @@ from io import BytesIO
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends, BackgroundTasks, Header
 from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from azure.ai.formrecognizer import DocumentAnalysisClient
 from azure.core.credentials import AzureKeyCredential
 from pinecone import Pinecone
 from scripts.gemini_client import GeminiChatClient
 from scripts.processor import get_local_embedding
+from app.core.rag_engine import retrieve_dual_namespace
 
 # ReportLab for PDF Export
 from reportlab.lib.pagesizes import letter
@@ -39,15 +44,23 @@ from api.schemas import EntityStatus, MigrationEntity, AuthKeys
 from api.processor import UniversalProcessor
 from app.core.evaluator import evaluate_live_document, run_system_evaluation
 from scripts.processor import process_new_pdf
-from scripts.full_audit import run_full_audit
+from scripts.full_audit import run_full_audit, _fallback_audit, _context_from_json_map
 from scripts.visual_anchor import find_coordinates
 
 # Directories
 DB_PATH = os.path.join(BASE_DIR, "leasesight.db")
 RAW_PDF_DIR = os.path.join(BASE_DIR, "data", "raw_pdfs")
+UPLOAD_DIR = os.path.join(BASE_DIR, "data", "uploads")
 JSON_MAP_DIR = os.path.join(BASE_DIR, "data", "json_maps")
-os.makedirs(RAW_PDF_DIR, exist_ok=True)
-os.makedirs(JSON_MAP_DIR, exist_ok=True)
+UPLOAD_DIRECTORIES = (RAW_PDF_DIR, UPLOAD_DIR, JSON_MAP_DIR)
+
+
+def ensure_upload_directories():
+    for directory in UPLOAD_DIRECTORIES:
+        os.makedirs(directory, exist_ok=True)
+
+
+ensure_upload_directories()
 
 
 class ContactPayload(BaseModel):
@@ -102,6 +115,7 @@ async def get_api_keys(request: Request) -> AuthKeys:
     # gemini_key sourced from server env only (BYOK flow may pass X-Gemini-Key in future)
     gemini_key   = (
         request.headers.get("X-Gemini-Key")
+        or request.headers.get("X-OpenAI-Key")
         or os.getenv("GEMINI_API_KEY")
         or os.getenv("MANAGED_GEMINI_KEY")
     )
@@ -117,26 +131,23 @@ async def get_api_keys(request: Request) -> AuthKeys:
 
 app = FastAPI(title="LeaseSight Production API")
 
-# CORS is handled ONLY by Caddy reverse proxy
-# This middleware ensures FastAPI never sends CORS headers (strip them if they exist)
-@app.middleware("http")
-async def remove_cors_headers(request: Request, call_next):
-    response = await call_next(request)
-    # Strip all CORS headers from response - Caddy will add the correct ones
-    headers_to_remove = [
-        "Access-Control-Allow-Origin",
-        "Access-Control-Allow-Methods",
-        "Access-Control-Allow-Headers",
-        "Access-Control-Allow-Credentials",
-        "Access-Control-Expose-Headers",
-        "Access-Control-Max-Age"
-    ]
-    for header in headers_to_remove:
-        try:
-            del response.headers[header]
-        except KeyError:
-            pass
-    return response
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+async def startup_checks():
+    ensure_upload_directories()
 
 @app.get("/api/health")
 async def health():
@@ -186,16 +197,18 @@ async def contact(payload: ContactPayload):
     conn.close()
     return {"status": "success", "message": "Contact request received"}
 
-def _collect_live_evaluation_chunks(file_name: str, pinecone_index) -> List[str]:
+def _collect_live_evaluation_chunks(file_name: str, pinecone_index, user_id: str = None) -> List[str]:
     chunks = []
     try:
         query_vector = get_local_embedding(
             "Lease compliance audit summary, critical clauses, obligations, risk warnings"
         )
-        results = pinecone_index.query(
-            vector=query_vector,
+        results = retrieve_dual_namespace(
+            pinecone_index=pinecone_index,
+            query_vector=query_vector,
             top_k=8,
-            filter={"file_name": {"$eq": file_name}},
+            file_name=file_name,
+            user_id=user_id,
             include_metadata=True,
         )
         for match in results.get("matches", []):
@@ -303,10 +316,20 @@ def _run_background_live_verification(
     file_names: List[str],
     gemini_key: str,
     pinecone_key: str,
+    user_id: str = None,
 ):
-    gemini_client = GeminiChatClient(api_key=gemini_key)
-    pc    = Pinecone(api_key=pinecone_key)
-    index = pc.Index("leasesight-index")
+    try:
+        gemini_client = GeminiChatClient(api_key=gemini_key)
+    except Exception as e:
+        print(f"[LIVE_EVAL] Gemini unavailable; live verification skipped: {e}")
+        gemini_client = None
+
+    try:
+        pc    = Pinecone(api_key=pinecone_key)
+        index = pc.Index("leasesight-index")
+    except Exception as e:
+        print(f"[LIVE_EVAL] Pinecone unavailable; live verification will use local fallback only: {e}")
+        index = None
     live_eval_query = (
         "Evaluate whether this generated lease clause analysis is grounded in the "
         "retrieved contract text and relevant to legal compliance review."
@@ -325,20 +348,29 @@ def _run_background_live_verification(
                     break
                 time.sleep(5)
 
-            report = run_full_audit(
-                file_name,
-                gemini_client=gemini_client,
-                pinecone_index=index,
-            )
+            if index:
+                report = run_full_audit(
+                    file_name,
+                    gemini_client=gemini_client,
+                    pinecone_index=index,
+                    user_id=user_id,
+                )
+            else:
+                report = _fallback_audit(
+                    _context_from_json_map(file_name),
+                    file_name,
+                    "Vector search was unavailable during live verification.",
+                )
             if not report or report.get("error"):
                 raise RuntimeError(report.get("error") if isinstance(report, dict) else "Audit report was empty.")
 
             generated_output = _audit_report_to_text(report)
-            retrieved_chunks = _collect_live_evaluation_chunks(file_name, index)
+            retrieved_chunks = _collect_live_evaluation_chunks(file_name, index, user_id=user_id)
             scores = evaluate_live_document(
                 user_query=live_eval_query,
                 generated_output=generated_output,
                 retrieved_chunks=retrieved_chunks,
+                user_id=user_id,
             )
             _save_live_evaluation_status(
                 task_id=task_id,
@@ -481,18 +513,44 @@ async def export_audit(filename: str, request: dict):
     buffer.seek(0)
     return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=audit_{filename}"})
 
+@app.post("/api/v1/audit")
 @app.post("/api/audit")
-async def start_audit(request: dict, keys: AuthKeys = Depends(get_api_keys)):
+async def start_audit(request: Request, keys: AuthKeys = Depends(get_api_keys)):
+    file_name = None
+    user_id = None
     try:
-        file_name = request.get("file_name")
+        payload = await request.json()
+        file_name = payload.get("file_name")
+        user_id = payload.get("user_id") or request.headers.get("X-User-Id") or "local"
         if not file_name: return {"error": "file_name required", "findings": [], "obligations": []}
-        
-        gemini_client = GeminiChatClient(api_key=keys.openai_key)  # openai_key slot holds Gemini key
-        pc    = Pinecone(api_key=keys.pinecone_key)
-        index = pc.Index("leasesight-index")
-        
-        report = run_full_audit(file_name, gemini_client=gemini_client, pinecone_index=index)
-        if not report: report = {"findings": [], "risk_score": 0}
+
+        try:
+            gemini_client = GeminiChatClient(api_key=keys.openai_key)  # openai_key slot holds Gemini key
+        except Exception as e:
+            print(f"[AUDIT] Gemini client unavailable; using fallback audit: {e}")
+            gemini_client = None
+
+        try:
+            pc    = Pinecone(api_key=keys.pinecone_key)
+            index = pc.Index("leasesight-index")
+        except Exception as e:
+            print(f"[AUDIT] Pinecone unavailable; using local JSON fallback: {e}")
+            index = None
+
+        if index:
+            report = run_full_audit(file_name, gemini_client=gemini_client, pinecone_index=index, user_id=user_id)
+        else:
+            report = _fallback_audit(
+                _context_from_json_map(file_name),
+                file_name,
+                "Vector search was unavailable. A conservative local fallback audit was returned.",
+            )
+        if not report or report.get("error"):
+            report = _fallback_audit(
+                _context_from_json_map(file_name),
+                file_name,
+                report.get("error") if isinstance(report, dict) else None,
+            )
         
         report.setdefault("findings", [])
         report.setdefault("obligations", [])
@@ -500,12 +558,23 @@ async def start_audit(request: dict, keys: AuthKeys = Depends(get_api_keys)):
             "Evaluate whether this lease compliance audit is faithful to the retrieved "
             "contract text and relevant to identifying key lease terms, obligations, and risks."
         )
-        live_eval_chunks = _collect_live_evaluation_chunks(file_name, index)
-        live_trust_scores = evaluate_live_document(
-            user_query=live_eval_query,
-            generated_output=_audit_report_to_text(report),
-            retrieved_chunks=live_eval_chunks,
-        )
+        try:
+            live_eval_chunks = _collect_live_evaluation_chunks(file_name, index, user_id=user_id) if index else []
+            live_trust_scores = evaluate_live_document(
+                user_query=live_eval_query,
+                generated_output=_audit_report_to_text(report),
+                retrieved_chunks=live_eval_chunks,
+                user_id=user_id,
+            )
+        except Exception as e:
+            print(f"[AUDIT] Live trust evaluation skipped for {file_name}: {e}")
+            live_trust_scores = {
+                "faithfulness": 0.0,
+                "answer_relevance": 0.0,
+                "groundedness_index": 0.0,
+                "is_trusted": False,
+                "error": str(e)[:300],
+            }
         
         # --- FIX: EXHAUSTIVE MARKING LOGIC ---
         annotations = []
@@ -542,10 +611,19 @@ async def start_audit(request: dict, keys: AuthKeys = Depends(get_api_keys)):
         }
         return report
     except Exception as e:
-        return {"error": str(e), "findings": [], "obligations": []}
+        report = _fallback_audit(_context_from_json_map(file_name) if file_name else "", file_name or "unknown.pdf", str(e))
+        report["error"] = str(e)
+        return report
 
+@app.post("/api/v1/upload")
 @app.post("/api/upload")
-async def start_migration(background_tasks: BackgroundTasks, files: List[UploadFile] = File(None, alias="file"), keys: AuthKeys = Depends(get_api_keys)):
+async def start_migration(
+    background_tasks: BackgroundTasks,
+    files: List[UploadFile] = File(None, alias="file"),
+    user_id: Optional[str] = None,
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+    keys: AuthKeys = Depends(get_api_keys),
+):
     if not files: raise HTTPException(status_code=422, detail="No files")
     if not keys.openai_key:  # openai_key slot holds Gemini key
         raise HTTPException(status_code=401, detail="Gemini API key is missing. Configure GEMINI_API_KEY on the server.")
@@ -555,6 +633,8 @@ async def start_migration(background_tasks: BackgroundTasks, files: List[UploadF
         raise HTTPException(status_code=401, detail="Azure Document Intelligence credentials are missing. Add them in settings or configure AZURE_KEY and AZURE_ENDPOINT on the server.")
 
     try:
+        ensure_upload_directories()
+        user_id = user_id or x_user_id or "local"
         task_id    = str(uuid.uuid4())[:8]
         file_names = [os.path.basename(f.filename) for f in files]
         for file in files:
@@ -562,15 +642,23 @@ async def start_migration(background_tasks: BackgroundTasks, files: List[UploadF
             with open(target, "wb") as f:
                 f.write(await file.read())
 
-        gemini_client = GeminiChatClient(api_key=keys.openai_key)
-        pc    = Pinecone(api_key=keys.pinecone_key)
-        index = pc.Index("leasesight-index")
-        azure_client = DocumentAnalysisClient(
-            endpoint=keys.azure_endpoint,
-            credential=AzureKeyCredential(keys.azure_key),
-        )
-
         def index_uploaded_files():
+            try:
+                pc = Pinecone(api_key=keys.pinecone_key)
+                index = pc.Index("leasesight-index")
+            except Exception as e:
+                print(f"[UPLOAD] Pinecone unavailable; JSON map fallback will still run: {e}", flush=True)
+                index = None
+
+            try:
+                azure_client = DocumentAnalysisClient(
+                    endpoint=keys.azure_endpoint,
+                    credential=AzureKeyCredential(keys.azure_key),
+                )
+            except Exception as e:
+                print(f"[UPLOAD] Azure unavailable; local PDF fallback will still run: {e}", flush=True)
+                azure_client = None
+
             for name in file_names:
                 path = os.path.join(RAW_PDF_DIR, name)
                 try:
@@ -578,21 +666,52 @@ async def start_migration(background_tasks: BackgroundTasks, files: List[UploadF
                         path, name,
                         pinecone_index=index,
                         azure_client=azure_client,
+                        user_id=user_id,
                     )
-                    print(f"[UPLOAD] Indexed {name}")
+                    print(f"[UPLOAD] Indexed {name}", flush=True)
                 except Exception as e:
-                    print(f"[UPLOAD] Indexing failed for {name}: {e}")
+                    print(f"[UPLOAD] Indexing failed for {name}: {e}", flush=True)
 
-        processor = UniversalProcessor(gemini_client, index, None)
-        background_tasks.add_task(index_uploaded_files)
-        background_tasks.add_task(processor.process_batch, task_id, file_names)
-        background_tasks.add_task(
-            _run_background_live_verification,
-            task_id,
-            file_names,
-            keys.openai_key,   # Gemini key stored in openai_key slot
-            keys.pinecone_key,
-        )
+        async def run_entity_extraction():
+            try:
+                gemini_client = GeminiChatClient(api_key=keys.openai_key)
+                processor = UniversalProcessor(gemini_client, None, None)
+                await processor.process_batch(task_id, file_names, user_id)
+            except Exception as e:
+                print(f"[UPLOAD] Entity extraction skipped for task {task_id}: {e}", flush=True)
+
+        # Native OS thread to bypass dynamic asynchronous anyio thread pool issues on Windows
+        import threading
+        def run_full_pipeline():
+            print(f"[BACKGROUND] Starting pipeline for batch {task_id}", flush=True)
+            try:
+                index_uploaded_files()
+            except Exception as e:
+                print(f"[BACKGROUND] Indexing failed: {e}", flush=True)
+
+            try:
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(run_entity_extraction())
+                loop.close()
+            except Exception as e:
+                print(f"[BACKGROUND] Entity extraction failed: {e}", flush=True)
+
+            try:
+                _run_background_live_verification(
+                    task_id,
+                    file_names,
+                    keys.openai_key,   # Gemini key stored in openai_key slot
+                    keys.pinecone_key,
+                    user_id,
+                )
+            except Exception as e:
+                print(f"[BACKGROUND] Live verification failed: {e}", flush=True)
+            print(f"[BACKGROUND] Pipeline completed for batch {task_id}", flush=True)
+
+        thread = threading.Thread(target=run_full_pipeline, daemon=True)
+        thread.start()
         return {
             "status": "success",
             "task_id": task_id,
