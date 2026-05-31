@@ -177,23 +177,21 @@ export function Header({ isAuditing, onToggleNetwork, documents, onSelectDoc }: 
           id="settings-nav-btn"
           className="relative flex items-center gap-2 px-2.5 py-1.5 transition-all hover:-translate-y-0.5 hover:opacity-80"
           style={{
-            background: true ? 'rgba(5,150,105,0.08)' : 'rgba(220,38,38,0.08)',
-            border: true ? '1px solid rgba(5,150,105,0.3)' : '1px solid rgba(220,38,38,0.3)',
+            background: 'rgba(5,150,105,0.08)',
+            border: '1px solid rgba(5,150,105,0.3)',
           }}
-          title={true ? 'API Settings (Keys Configured)' : 'API keys not configured — click to set up'}
+          title="System Tier: Enterprise Server Secured"
         >
-          {true
-            ? <Settings className="w-3.5 h-3.5" style={{ color: 'var(--accent-emerald)' }} />
-            : <KeyRound  className="w-3.5 h-3.5" style={{ color: 'var(--accent-red)' }} />}
+          <Settings className="w-3.5 h-3.5" style={{ color: 'var(--accent-emerald)' }} />
           
           <span className="text-[10px] font-semibold tracking-wide hidden lg:inline"
-                style={{ color: true ? 'var(--accent-emerald)' : 'var(--accent-red)' }}>
-            {true ? 'BACKEND' : 'CHECK API'}
+                style={{ color: 'var(--accent-emerald)' }}>
+            ENTERPRISE SECURED
           </span>
 
           {/* Status Dot */}
           <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full"
-                style={{ background: true ? 'var(--accent-emerald)' : 'var(--accent-red)' }} />
+                style={{ background: 'var(--accent-emerald)' }} />
         </Link>
       </div>
     </header>

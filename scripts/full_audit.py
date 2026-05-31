@@ -55,21 +55,46 @@ You are "The Clerk," a Legal Synthesizer. Produce a final JSON report with:
 """
 
 AUDIT_PROMPT = """
-You are a Senior Legal Analyst and Data Architect specializing in commercial real estate auditing.
-Convert the provided lease text into high-fidelity structured JSON for visual grounding.
+You are a Senior Legal Analyst and Data Architect specializing in commercial real estate and corporate contract auditing.
+Convert the provided document text into high-fidelity structured JSON for visual grounding.
 
-Required data fields:
-- Parties: full legal names of the lessor/landlord and lessee/tenant.
-- Financials: monthly or annual rent, security deposit, currency, rent escalation percentages.
-- Term and tenure: total lease duration, commencement date, expiry date.
-- Operational clauses: termination notice periods, renewal options, force majeure applicability.
-- Legal and compliance: governing law and dispute resolution path.
+EXTRACT THE FOLLOWING 20-POINT COMPREHENSIVE MATRIX:
 
-Visual marking rules:
-- Every finding and obligation must include evidence_quote.
-- evidence_quote must be an exact verbatim string from the provided text.
+1. CORE ENTITY & METADATA IDENTIFICATION:
+   - Document Category Class (e.g., Commercial Lease, Content License, SaaS, NDA)
+   - First Party Name & Identity (Landlord / Licensor / Service Provider)
+   - Second Party Name & Identity (Tenant / Licensee / Client)
+   - Execution Date & Formal Agreement Title
+
+2. CHRONOLOGICAL LIFECYCLE CONTROLS:
+   - Contract Commencement / Effective Date
+   - Initial Contract Duration (Term Length in months/years)
+   - Automatic Renewal / Extension Provisions (Provisions for rollover periods)
+   - Termination Notice Window (Required prior written notice period, e.g., 60 days)
+
+3. FINANCIALS, FEES & REVENUE CONFIGURATIONS:
+   - Base Fixed Monetary Obligations (e.g., Monthly Rent, Fixed Retainers)
+   - Variable Splits / Revenue Shares (e.g., Percentage payout allocations like 45%)
+   - Security Deposits / Fiscal Guarantees
+   - Invoicing, Payment, and Reporting Cycles (e.g., Monthly or Quarterly terms)
+
+4. RISK, COMPLIANCE & LEGAL TRAPS:
+   - Financial Audit Rights & Shift-of-Cost Penalty Thresholds
+   - Late Fees, Interest Penalties, and Liquidated Damage Rates
+   - Non-Compete, Exclusivity, or Restrictive Covenants
+   - Indemnification & Liability Hold-Harmless Clauses
+
+5. RESTRICTIONS, SCOPE & GOVERNANCE:
+   - Permitted Use / Scope of Distribution (e.g., Worldwide, Specific Content Verticals)
+   - Subleasing / Sub-licensing Assignment Restrictions
+   - Governing Law Jurisdiction (State/Country) and Designated Dispute Venue (STRIP STRUCTURAL HEADERS like 'ARTICLE 10' - return only 'New York, USA')
+   - Survival Clauses (e.g., Confidentiality surviving for 2 years post-termination)
+
+CRITICAL RULES:
+- Every finding and obligation MUST include an 'evidence_quote' that is an EXACT verbatim string from the text.
+- IF A CLAUSE IS NOT EXPLICITLY FOUND IN THE TEXT, DO NOT INCLUDE IT IN THE 'findings' OR 'obligations' ARRAY. OMIT IT ENTIRELY.
+- For Governing Law and Venue, automatically strip structural headers and just return the location.
 - Prefer quotes at least 20 characters long.
-- If the document does not contain a value, use value "Not Found" and evidence_quote "Not Found".
 
 Return JSON only with this shape:
 {
