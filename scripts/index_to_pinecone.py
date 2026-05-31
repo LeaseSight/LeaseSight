@@ -12,16 +12,16 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pinecone import Pinecone
 
-from scripts.gemini_client import GeminiEmbeddingClient
+from scripts.processor import get_local_embedding
 
 # ---------------------------------------------------------------------------
 # 1. SETUP
 # ---------------------------------------------------------------------------
 load_dotenv()
 
-embed_client = GeminiEmbeddingClient()          # 768-dim text-embedding-004
-pc           = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-index        = pc.Index("leasesight-index")     # Must be recreated at dim=768
+# Pinecone client
+pc    = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+index = pc.Index("leasesight-index")     # Must be at dim=768
 
 BASE_DIR     = Path(__file__).resolve().parents[1]
 JSON_MAP_DIR = BASE_DIR / "data" / "json_maps"
@@ -53,8 +53,8 @@ def upload_to_brain():
 
             total_pages += 1
             try:
-                # --- Gemini embedding (768-dim) ---
-                vector = embed_client.embed(page_text, task_type="RETRIEVAL_DOCUMENT")
+                # --- Local embedding (768-dim, offline, no rate limits) ---
+                vector = get_local_embedding(page_text)
 
                 metadata = {
                     "file_name":   file_name,

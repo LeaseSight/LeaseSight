@@ -9,7 +9,8 @@ import re
 import time
 from pathlib import Path
 
-from scripts.gemini_client import GeminiChatClient, GeminiEmbeddingClient
+from scripts.gemini_client import GeminiChatClient
+from scripts.processor import get_local_embedding
 
 # --- CONTEXT LIMIT SAFETY ---
 CONTEXT_CHAR_LIMIT = 15000
@@ -298,11 +299,9 @@ def run_full_audit(target_file, gemini_client=None, pinecone_index=None,
     openai_client  : (deprecated) accepted but ignored for backwards compat
     """
     try:
-        # Auto-initialise clients when called standalone (scripts/)
+        # Auto-initialise chat client when called standalone
         if gemini_client is None:
             gemini_client = GeminiChatClient()
-
-        embed_client = GeminiEmbeddingClient()
 
         if not pinecone_index:
             return {"error": "Pinecone index not initialised"}
@@ -314,7 +313,7 @@ def run_full_audit(target_file, gemini_client=None, pinecone_index=None,
         vec = None
         if not context:
             try:
-                vec = embed_client.embed_query("Lease terms, parties, rent")
+                vec = get_local_embedding("Lease terms, parties, rent")
                 results = pinecone_index.query(
                     vector=vec,
                     top_k=15,
@@ -339,7 +338,7 @@ def run_full_audit(target_file, gemini_client=None, pinecone_index=None,
         market_context = "No market precedents found."
         try:
             if vec is None:
-                vec = embed_client.embed_query("Lease terms, parties, rent")
+                vec = get_local_embedding("Lease terms, parties, rent")
             m_res = pinecone_index.query(
                 vector=vec,
                 top_k=5,
@@ -353,8 +352,7 @@ def run_full_audit(target_file, gemini_client=None, pinecone_index=None,
         except Exception:
             pass
 
-        # 3. Single-pass AUDIT_PROMPT (faster than 3-agent pipeline; 3-agent
-        #    is kept as agent_miner/judge/clerk for callers who need it)
+        # 3. Single-pass AUDIT_PROMPT
         try:
             payload = json.dumps({
                 "document_name": target_file,

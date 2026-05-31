@@ -1,15 +1,6 @@
 # scripts/reindex_pinecone.py
-# Re-index all existing Pinecone vectors from OpenAI 1536-dim
-# to Gemini text-embedding-004 768-dim.
-#
-# STRATEGY
-# --------
-# The dimension of an existing Pinecone index CANNOT be changed in-place.
-# This script therefore:
-#   1. Fetches metadata for every existing vector (in pages of 100).
-#   2. Re-embeds the stored `text` with Gemini text-embedding-004.
-#   3. Upserts into the NEW 768-dim index (leasesight-index, already recreated
-#      at dim=768 via scripts/recreate_pinecone_index.py).
+# Re-index all JSON spatial maps into Pinecone using LOCAL sentence-transformer embeddings.
+# Model: all-mpnet-base-v2 (768-dim, offline, zero API calls, no rate limits).
 #
 # The script is idempotent: running it twice is safe because vector IDs are
 # deterministic (f"{file_name}_p{page_number}").
@@ -17,73 +8,40 @@
 # Usage
 # -----
 #   python -m scripts.reindex_pinecone
+#   python -m scripts.reindex_pinecone --dry-run
 #
-# Environment variables required (.env / api/.env):
+# Environment variables required:
 #   PINECONE_API_KEY
-#   GEMINI_API_KEY   (or MANAGED_GEMINI_KEY)
 
 import os
 import json
-import time
 import sys
 from pathlib import Path
 from typing import List, Dict, Any
 
 from dotenv import load_dotenv
 
-# Load from both .env locations (root wins; api/.env is also checked)
 _ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(_ROOT / ".env")
 load_dotenv(_ROOT / "api" / ".env")
 
 from pinecone import Pinecone
-from scripts.gemini_client import GeminiEmbeddingClient
+from scripts.processor import get_local_embedding
 
 # ---------------------------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------------------------
 
-INDEX_NAME      = "leasesight-index"   # Must already be 768-dim
-FETCH_BATCH     = 100                  # IDs to fetch per round
-UPSERT_BATCH    = 50                   # Vectors to upsert per call
-EMBED_DELAY     = 0.06                 # Seconds between embedding calls (rate-limit)
-JSON_MAP_DIR    = _ROOT / "data" / "json_maps"
+INDEX_NAME   = "leasesight-index"   # Must be at dim=768
+UPSERT_BATCH = 50                   # Vectors per Pinecone upsert call
+JSON_MAP_DIR = _ROOT / "data" / "json_maps"
 
 # ---------------------------------------------------------------------------
 # HELPERS
 # ---------------------------------------------------------------------------
 
-def _chunks(lst: list, n: int):
-    """Yield successive n-sized chunks from lst."""
-    for i in range(0, len(lst), n):
-        yield lst[i: i + n]
-
-
-def _collect_ids_from_json_maps() -> List[str]:
-    """
-    Build the full list of expected vector IDs from local JSON spatial maps.
-    This is the primary source of truth for what should be in the index.
-    """
-    ids = []
-    for json_file in sorted(JSON_MAP_DIR.glob("*.json")):
-        try:
-            with open(json_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            file_name = data.get("file_name", json_file.stem)
-            for page in data.get("pages", []):
-                page_num = page.get("page_number", "?")
-                ids.append(f"{file_name}_p{page_num}")
-        except Exception as e:
-            print(f"  [WARN] Could not parse {json_file.name}: {e}")
-    return ids
-
-
 def _build_text_lookup() -> Dict[str, str]:
-    """
-    Return a dict mapping vector_id → page_text for every page in every JSON map.
-    Used as the text source for re-embedding (avoids needing Pinecone metadata fetch
-    when the index was recreated empty).
-    """
+    """vector_id -> page_text for every page in every JSON map."""
     lookup: Dict[str, str] = {}
     for json_file in sorted(JSON_MAP_DIR.glob("*.json")):
         try:
@@ -103,10 +61,7 @@ def _build_text_lookup() -> Dict[str, str]:
 
 
 def _build_metadata_lookup() -> Dict[str, Dict[str, Any]]:
-    """
-    Build a dict mapping vector_id → Pinecone metadata dict.
-    Metadata is re-used verbatim so we don't need to fetch from the old index.
-    """
+    """vector_id -> Pinecone metadata dict."""
     lookup: Dict[str, Dict[str, Any]] = {}
     for json_file in sorted(JSON_MAP_DIR.glob("*.json")):
         try:
@@ -133,28 +88,28 @@ def _build_metadata_lookup() -> Dict[str, Dict[str, Any]]:
     return lookup
 
 
+def _chunks(lst: list, n: int):
+    for i in range(0, len(lst), n):
+        yield lst[i: i + n]
+
+
 # ---------------------------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------------------------
 
 def reindex(dry_run: bool = False):
     """
-    Re-embed every page from local JSON maps using Gemini text-embedding-004
-    and upsert into the 768-dim Pinecone index.
-
-    Parameters
-    ----------
-    dry_run : bool
-        If True, print what would be done without calling Pinecone upsert.
+    Embed every page from local JSON maps using all-mpnet-base-v2 and
+    upsert into the 768-dim Pinecone index.
     """
     print("=" * 60)
-    print("  LeaseSight -- Pinecone Re-indexing (OpenAI -> Gemini)")
+    print("  LeaseSight -- Pinecone Re-indexing (Local Embeddings)")
+    print("  Model: sentence-transformers/all-mpnet-base-v2 (768-dim)")
     print("=" * 60)
 
-    # --- Clients ---
-    pc          = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-    index       = pc.Index(INDEX_NAME)
-    embed       = GeminiEmbeddingClient()
+    # --- Pinecone ---
+    pc    = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+    index = pc.Index(INDEX_NAME)
 
     # --- Verify dimension ---
     stats = index.describe_index_stats()
@@ -167,7 +122,7 @@ def reindex(dry_run: bool = False):
         sys.exit(1)
     print(f"\nIndex '{INDEX_NAME}' confirmed at dimension {dim or 'unknown (new/empty)'}.")
 
-    # --- Build source data from JSON maps ---
+    # --- Build source data ---
     print("\nScanning local JSON spatial maps...")
     text_lookup     = _build_text_lookup()
     metadata_lookup = _build_metadata_lookup()
@@ -179,9 +134,9 @@ def reindex(dry_run: bool = False):
         )
         sys.exit(1)
 
-    all_ids = list(text_lookup.keys())
-    print(f"Found {len(all_ids)} page vectors to re-index across "
-          f"{len(set(v.split('_p')[0] for v in all_ids))} documents.")
+    all_ids     = list(text_lookup.keys())
+    doc_count   = len(set(v.split("_p")[0] for v in all_ids))
+    print(f"Found {len(all_ids)} page vectors to re-index across {doc_count} documents.")
 
     if dry_run:
         print("\n[DRY RUN] No changes will be made to Pinecone.")
@@ -191,21 +146,25 @@ def reindex(dry_run: bool = False):
             print(f"  ... and {len(all_ids) - 5} more.")
         return
 
-    # --- Embed & Upsert ---
-    print("\nStarting embedding + upsert...")
+    # --- Warm up the local model (download on first run) ---
+    print("\nWarming up local embedding model...")
+    get_local_embedding("warmup")
+    print("Model ready.\n")
+
+    # --- Embed & batch upsert (no API = no rate limits = full CPU/GPU speed) ---
+    print("Starting embedding + upsert...")
     success_count = 0
     fail_count    = 0
     upsert_buffer: List[tuple] = []
 
-    def _flush_buffer():
+    def _flush():
         nonlocal success_count
         if not upsert_buffer:
             return
         try:
             index.upsert(vectors=upsert_buffer)
             success_count += len(upsert_buffer)
-            print(f"  [Pinecone] Upserted batch of {len(upsert_buffer)} vectors "
-                  f"(total: {success_count})")
+            print(f"  [Pinecone] Upserted batch of {len(upsert_buffer):>3} | total: {success_count}")
         except Exception as e:
             print(f"  [ERROR] Pinecone upsert failed: {e}")
         upsert_buffer.clear()
@@ -215,30 +174,26 @@ def reindex(dry_run: bool = False):
         metadata  = metadata_lookup.get(vid, {})
 
         try:
-            vector = embed.embed(page_text, task_type="RETRIEVAL_DOCUMENT")
+            # Local CPU/GPU embedding — instant, zero quota cost
+            vector = get_local_embedding(page_text)
             upsert_buffer.append((vid, vector, metadata))
         except Exception as e:
             fail_count += 1
             print(f"  [ERROR] Embedding failed for {vid}: {e}")
             continue
 
-        # Flush every UPSERT_BATCH vectors
         if len(upsert_buffer) >= UPSERT_BATCH:
-            _flush_buffer()
+            _flush()
 
-        # Progress every 50 embeddings
-        if i % 50 == 0:
+        if i % 500 == 0:
             print(f"  Progress: {i}/{len(all_ids)} embedded...")
 
-        time.sleep(EMBED_DELAY)
-
-    # Flush any remainder
-    _flush_buffer()
+    _flush()  # Flush remainder
 
     # --- Summary ---
     print("\n" + "=" * 60)
-    print(f"  Re-indexing complete.")
-    print(f"  [OK] Upserted : {success_count} vectors")
+    print("  Re-indexing complete.")
+    print(f"  [OK]   Upserted : {success_count} vectors")
     if fail_count:
         print(f"  [FAIL] Failed   : {fail_count} vectors (see errors above)")
     print("=" * 60)
@@ -250,7 +205,10 @@ def reindex(dry_run: bool = False):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Re-index Pinecone from JSON maps using Gemini embeddings.")
-    parser.add_argument("--dry-run", action="store_true", help="Print plan without writing to Pinecone.")
+    parser = argparse.ArgumentParser(
+        description="Re-index Pinecone from JSON maps using local sentence-transformer embeddings."
+    )
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print plan without writing to Pinecone.")
     args = parser.parse_args()
     reindex(dry_run=args.dry_run)

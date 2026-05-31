@@ -7,7 +7,8 @@ import sys
 from dotenv import load_dotenv
 from pinecone import Pinecone
 
-from scripts.gemini_client import GeminiChatClient, GeminiEmbeddingClient
+from scripts.gemini_client import GeminiChatClient
+from scripts.processor import get_local_embedding
 
 sys.path.append(os.path.join(os.getcwd(), "scripts"))
 load_dotenv()
@@ -34,24 +35,23 @@ def ask_document(
     query: str,
     file_name: str,
     gemini_client: GeminiChatClient = None,
-    embed_client: GeminiEmbeddingClient = None,
     pinecone_index=None,
     # Legacy kwargs accepted but ignored
     openai_client=None,
+    embed_client=None,
 ) -> dict:
     """
-    Scoped document chat. Clients injected by API layer; falls back to .env for local dev.
+    Scoped document chat. Gemini client injected by API layer; falls back to .env for local dev.
+    Embeddings are generated locally with no API calls.
     """
     if gemini_client is None:
         gemini_client = GeminiChatClient()
-    if embed_client is None:
-        embed_client = GeminiEmbeddingClient()
     if pinecone_index is None:
         pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
         pinecone_index = pc.Index("leasesight-index")
 
     try:
-        query_vector = embed_client.embed_query(query)
+        query_vector = get_local_embedding(query)
         results = pinecone_index.query(
             vector=query_vector,
             top_k=5,

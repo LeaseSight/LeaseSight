@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from dotenv import load_dotenv
 from pinecone import Pinecone
-from scripts.gemini_client import GeminiEmbeddingClient
+from scripts.processor import get_local_embedding
 
 # --- IMPORT FALLBACK ---
 sys.path.append(os.path.join(os.getcwd(), "scripts"))
@@ -94,9 +94,8 @@ def commit_to_knowledge_base(file_name, source_path=None, dest_folder=None, vect
         # Auto-generate vector IDs if not provided
         # Vectors are stored as "{file_name}_p{page_number}"
         if not vector_ids:
-            # Discover all vectors for this file via a query embedding
-            _embed = GeminiEmbeddingClient()
-            dummy_vec = _embed.embed_query("contract document")
+            # Discover all vectors for this file via a local query embedding
+            dummy_vec = get_local_embedding("contract document")
             query_results = idx.query(
                 vector=dummy_vec,
                 top_k=50,

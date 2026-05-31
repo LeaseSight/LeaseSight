@@ -23,7 +23,8 @@ from pydantic import BaseModel
 from azure.ai.formrecognizer import DocumentAnalysisClient
 from azure.core.credentials import AzureKeyCredential
 from pinecone import Pinecone
-from scripts.gemini_client import GeminiChatClient, GeminiEmbeddingClient
+from scripts.gemini_client import GeminiChatClient
+from scripts.processor import get_local_embedding
 
 # ReportLab for PDF Export
 from reportlab.lib.pagesizes import letter
@@ -166,12 +167,10 @@ async def get_evaluation_summary():
 @app.api_route("/api/test-connection", methods=["GET", "POST", "OPTIONS"])
 async def test_connection(keys: AuthKeys = Depends(get_api_keys)):
     try:
-        # Validate the Gemini key by creating a lightweight client
+        # Validate connection with a lightweight local embedding test
         client = GeminiChatClient(api_key=keys.openai_key)  # openai_key slot holds Gemini key
-        # A simple embed call is faster than a chat round-trip for health checks
-        embed = GeminiEmbeddingClient(api_key=keys.openai_key)
-        embed.embed("connection test", task_type="SEMANTIC_SIMILARITY")
-        return {"success": True, "status": "success", "message": "Gemini connection verified"}
+        get_local_embedding("connection test")  # warms up local model, no API call
+        return {"success": True, "status": "success", "message": "Gemini connection verified (local embedding)"}
     except Exception as e:
         return {"success": False, "status": "error", "message": str(e)}
 
@@ -187,10 +186,10 @@ async def contact(payload: ContactPayload):
     conn.close()
     return {"status": "success", "message": "Contact request received"}
 
-def _collect_live_evaluation_chunks(file_name: str, embed_client: GeminiEmbeddingClient, pinecone_index) -> List[str]:
+def _collect_live_evaluation_chunks(file_name: str, pinecone_index) -> List[str]:
     chunks = []
     try:
-        query_vector = embed_client.embed_query(
+        query_vector = get_local_embedding(
             "Lease compliance audit summary, critical clauses, obligations, risk warnings"
         )
         results = pinecone_index.query(
@@ -306,7 +305,6 @@ def _run_background_live_verification(
     pinecone_key: str,
 ):
     gemini_client = GeminiChatClient(api_key=gemini_key)
-    embed_client  = GeminiEmbeddingClient(api_key=gemini_key)
     pc    = Pinecone(api_key=pinecone_key)
     index = pc.Index("leasesight-index")
     live_eval_query = (
@@ -336,7 +334,7 @@ def _run_background_live_verification(
                 raise RuntimeError(report.get("error") if isinstance(report, dict) else "Audit report was empty.")
 
             generated_output = _audit_report_to_text(report)
-            retrieved_chunks = _collect_live_evaluation_chunks(file_name, embed_client, index)
+            retrieved_chunks = _collect_live_evaluation_chunks(file_name, index)
             scores = evaluate_live_document(
                 user_query=live_eval_query,
                 generated_output=generated_output,
@@ -490,7 +488,6 @@ async def start_audit(request: dict, keys: AuthKeys = Depends(get_api_keys)):
         if not file_name: return {"error": "file_name required", "findings": [], "obligations": []}
         
         gemini_client = GeminiChatClient(api_key=keys.openai_key)  # openai_key slot holds Gemini key
-        embed_client  = GeminiEmbeddingClient(api_key=keys.openai_key)
         pc    = Pinecone(api_key=keys.pinecone_key)
         index = pc.Index("leasesight-index")
         
@@ -503,7 +500,7 @@ async def start_audit(request: dict, keys: AuthKeys = Depends(get_api_keys)):
             "Evaluate whether this lease compliance audit is faithful to the retrieved "
             "contract text and relevant to identifying key lease terms, obligations, and risks."
         )
-        live_eval_chunks = _collect_live_evaluation_chunks(file_name, embed_client, index)
+        live_eval_chunks = _collect_live_evaluation_chunks(file_name, index)
         live_trust_scores = evaluate_live_document(
             user_query=live_eval_query,
             generated_output=_audit_report_to_text(report),
@@ -566,7 +563,6 @@ async def start_migration(background_tasks: BackgroundTasks, files: List[UploadF
                 f.write(await file.read())
 
         gemini_client = GeminiChatClient(api_key=keys.openai_key)
-        embed_client  = GeminiEmbeddingClient(api_key=keys.openai_key)
         pc    = Pinecone(api_key=keys.pinecone_key)
         index = pc.Index("leasesight-index")
         azure_client = DocumentAnalysisClient(
@@ -580,7 +576,6 @@ async def start_migration(background_tasks: BackgroundTasks, files: List[UploadF
                 try:
                     process_new_pdf(
                         path, name,
-                        embed_client=embed_client,
                         pinecone_index=index,
                         azure_client=azure_client,
                     )
