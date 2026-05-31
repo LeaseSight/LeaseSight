@@ -23,45 +23,9 @@ const API_BASE = resolveApiBase();
 // ---------------------------------------------------------------------------
 
 let globalUserId: string | null = null;
-let globalTier: 'BYOK' | 'Managed' | null = null;
 
-export function setApiAuthContext(userId: string | null, tier: 'BYOK' | 'Managed' | null) {
+export function setApiAuthContext(userId: string | null) {
   globalUserId = userId;
-  globalTier = tier;
-}
-
-// ---------------------------------------------------------------------------
-// Key Storage Helpers
-// ---------------------------------------------------------------------------
-
-export interface StoredKeys {
-  openai: string;
-  pinecone: string;
-  azureKey: string;
-  azureEndpoint: string;
-}
-
-export function getStoredKeys(): StoredKeys {
-  if (typeof window === 'undefined') return { openai: '', pinecone: '', azureKey: '', azureEndpoint: '' };
-  return {
-    openai:        localStorage.getItem('ls_openai_key') || '',
-    pinecone:      localStorage.getItem('ls_pinecone_key') || '',
-    azureKey:      localStorage.getItem('ls_azure_key') || '',
-    azureEndpoint: localStorage.getItem('ls_azure_endpoint') || '',
-  };
-}
-
-export function saveStoredKeys(keys: Partial<StoredKeys>) {
-  if (typeof window === 'undefined') return;
-  if (keys.openai        !== undefined) localStorage.setItem('ls_openai_key',      keys.openai);
-  if (keys.pinecone      !== undefined) localStorage.setItem('ls_pinecone_key',    keys.pinecone);
-  if (keys.azureKey      !== undefined) localStorage.setItem('ls_azure_key',       keys.azureKey);
-  if (keys.azureEndpoint !== undefined) localStorage.setItem('ls_azure_endpoint',  keys.azureEndpoint);
-}
-
-export function hasStoredKeys(): boolean {
-  const k = getStoredKeys();
-  return !!k.openai;
 }
 
 export type SubscriptionTier = 'free' | 'pro';
@@ -137,10 +101,6 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
       if (body?.detail) detail = body.detail;
     } catch { /* ignore parse error */ }
 
-    if (typeof window !== 'undefined') {
-      sessionStorage.setItem('ls_auth_error', detail);
-      window.location.href = '/settings';
-    }
     throw new ApiAuthError(detail);
   }
 
@@ -211,7 +171,6 @@ export const api = {
     if (res.status === 401) {
       let detail = 'API key invalid or missing.';
       try { const b = await res.json(); if (b?.detail) detail = b.detail; } catch { /* ignore */ }
-      if (typeof window !== 'undefined') { sessionStorage.setItem('ls_auth_error', detail); window.location.href = '/settings'; }
       throw new ApiAuthError(detail);
     }
     if (!res.ok) throw new Error(`Upload error: ${res.status}`);

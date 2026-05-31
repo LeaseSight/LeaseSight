@@ -257,7 +257,7 @@ export function RightPane({ selectedDoc, annotations, targetPage }: RightPanePro
             }
             error={
               <div className="text-red-400 text-sm text-center p-10 rounded-2xl bg-red-950/20 border border-red-500/20">
-                Failed to load document. Please check your network connection or API keys.
+                Failed to load document. Please check your network connection or backend status.
               </div>
             }
           >

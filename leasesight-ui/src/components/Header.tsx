@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Activity, Search, Wifi, WifiOff, Network, Settings, KeyRound, ChevronDown, Database, LayoutPanelLeft, GraduationCap } from 'lucide-react';
-import { api, hasStoredKeys } from '@/lib/api';
+import { Activity, Search, Wifi, WifiOff, Network, Settings, ChevronDown, Database, LayoutPanelLeft, GraduationCap } from 'lucide-react';
+import { api } from '@/lib/api';
 import { BrandLogo } from './BrandLogo';
 
 interface HeaderProps {
@@ -14,15 +14,12 @@ interface HeaderProps {
 }
 
 export function Header({ isAuditing, onToggleNetwork, documents, onSelectDoc }: HeaderProps) {
-  const [health, setHealth]               = useState<{ pinecone: string; openai: string } | null>(null);
+  const [health, setHealth]               = useState<{ status?: string } | null>(null);
   const [searchQuery, setSearchQuery]     = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
-  const [keysConfigured, setKeysConfigured]   = useState(false);
   const [isServicesOpen, setIsServicesOpen]   = useState(false);
 
   useEffect(() => {
-    setKeysConfigured(hasStoredKeys());
-
     const fetchHealth = () => {
       api.health().then(setHealth).catch(() => setHealth(null));
     };
@@ -31,7 +28,7 @@ export function Header({ isAuditing, onToggleNetwork, documents, onSelectDoc }: 
     return () => clearInterval(interval);
   }, []);
 
-  const isConnected = health?.pinecone === 'connected' && health?.openai === 'connected';
+  const isConnected = Boolean(health?.status);
 
   return (
     <header className="h-14 flex items-center justify-between px-4 border-b glass shrink-0"
@@ -174,29 +171,29 @@ export function Header({ isAuditing, onToggleNetwork, documents, onSelectDoc }: 
         {/* Divider */}
         <div className="w-px h-5" style={{ background: 'var(--border-default)' }} />
 
-        {/* Settings / API Keys Link */}
+        {/* Settings / Backend Status Link */}
         <Link
           href="/settings"
           id="settings-nav-btn"
           className="relative flex items-center gap-2 px-2.5 py-1.5 transition-all hover:-translate-y-0.5 hover:opacity-80"
           style={{
-            background: keysConfigured ? 'rgba(5,150,105,0.08)' : 'rgba(220,38,38,0.08)',
-            border: keysConfigured ? '1px solid rgba(5,150,105,0.3)' : '1px solid rgba(220,38,38,0.3)',
+            background: true ? 'rgba(5,150,105,0.08)' : 'rgba(220,38,38,0.08)',
+            border: true ? '1px solid rgba(5,150,105,0.3)' : '1px solid rgba(220,38,38,0.3)',
           }}
-          title={keysConfigured ? 'API Settings (Keys Configured)' : 'API keys not configured — click to set up'}
+          title={true ? 'API Settings (Keys Configured)' : 'API keys not configured — click to set up'}
         >
-          {keysConfigured
+          {true
             ? <Settings className="w-3.5 h-3.5" style={{ color: 'var(--accent-emerald)' }} />
             : <KeyRound  className="w-3.5 h-3.5" style={{ color: 'var(--accent-red)' }} />}
           
           <span className="text-[10px] font-semibold tracking-wide hidden lg:inline"
-                style={{ color: keysConfigured ? 'var(--accent-emerald)' : 'var(--accent-red)' }}>
-            {keysConfigured ? 'API KEYS' : 'CONFIG API'}
+                style={{ color: true ? 'var(--accent-emerald)' : 'var(--accent-red)' }}>
+            {true ? 'BACKEND' : 'CHECK API'}
           </span>
 
           {/* Status Dot */}
           <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full"
-                style={{ background: keysConfigured ? 'var(--accent-emerald)' : 'var(--accent-red)' }} />
+                style={{ background: true ? 'var(--accent-emerald)' : 'var(--accent-red)' }} />
         </Link>
       </div>
     </header>

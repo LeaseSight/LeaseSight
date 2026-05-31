@@ -32,13 +32,13 @@ export default function PricingPage() {
         <div className="text-center space-y-4 mb-20">
           <h1 className="text-5xl md:text-7xl font-bold tracking-tight">Flexible Intelligence.</h1>
           <p className="text-white/40 text-lg max-w-xl mx-auto font-mono">
-            Choose how you power your audits. Bring your own brain or use ours.
+            Managed Gemini, Azure OCR, local embeddings, and Pinecone indexing in one workflow.
           </p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-5xl mx-auto">
           
-          {/* BYOK Tier */}
+          {/* Managed Tier */}
           <div className="group relative rounded-[2.5rem] border border-white/10 bg-white/5 backdrop-blur-xl p-10 transition-all hover:border-purple-500/30 hover:bg-white/10">
             <div className="flex items-center justify-between mb-8">
               <div className="p-3 rounded-2xl bg-purple-500/10 border border-purple-500/20 text-purple-400">
@@ -53,7 +53,7 @@ export default function PricingPage() {
                 <span className="text-white/30 text-sm font-mono">/month</span>
               </div>
               <p className="mt-4 text-white/50 text-sm leading-relaxed">
-                Bring your own OpenAI, Pinecone, and Azure keys. We provide the professional UI, RAG logic, and Visual Proof-Chain workstation.
+                Server-managed Gemini, Azure Document Intelligence, Pinecone, and local transformer embeddings. Upload documents and audit without browser-side keys.
               </p>
             </div>
 
@@ -62,7 +62,7 @@ export default function PricingPage() {
               <PricingFeature text="Bulk Migration Engine" />
               <PricingFeature text="Visual Proof-Chain Integration" />
               <PricingFeature text="Unlimited Local Documents" />
-              <PricingFeature text="BYOK Configuration" />
+              <PricingFeature text="Managed Backend Configuration" />
             </ul>
 
             <Link 
@@ -73,7 +73,7 @@ export default function PricingPage() {
             </Link>
           </div>
 
-          {/* Managed Tier */}
+          {/* Scale Tier */}
           <div className="group relative rounded-[2.5rem] border-2 border-blue-500/30 bg-blue-500/5 backdrop-blur-xl p-10 transition-all hover:bg-blue-500/10">
             <div className="absolute top-0 right-0 p-8">
               <Sparkles className="w-6 h-6 text-blue-400 animate-pulse" />
@@ -98,7 +98,7 @@ export default function PricingPage() {
 
             <ul className="space-y-4 mb-10">
               <PricingFeature text="Everything in Power User" />
-              <PricingFeature text="No API Keys Required" />
+              <PricingFeature text="No User API Keys Required" />
               <PricingFeature text="High-Priority GPU Queue" />
               <PricingFeature text="50 Managed Documents / mo" />
               <PricingFeature text="Managed Vector Storage" />

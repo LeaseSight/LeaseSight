@@ -1,6 +1,6 @@
 'use client';
 
-import { useAuth, useUser, SignInButton } from '@clerk/nextjs';
+import { useAuth, SignInButton } from '@clerk/nextjs';
 import { useRouter, usePathname } from 'next/navigation';
 import { useEffect } from 'react';
 import { Loader2, ShieldAlert } from 'lucide-react';
@@ -8,21 +8,12 @@ import { setApiAuthContext } from '@/lib/api';
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const { isLoaded, userId } = useAuth();
-  const { user } = useUser();
   const router = useRouter();
   const pathname = usePathname();
 
   useEffect(() => {
     if (isLoaded) {
-      // Set the API context based on the user's metadata (provided by Clerk)
-      const tier = (user && user.publicMetadata) ? (user.publicMetadata.tier as 'BYOK' | 'Managed') : undefined;
-      setApiAuthContext(userId, tier || 'Managed'); // Fallback to Managed for current testing
-
-      // IF logged in but no tier explicitly set, and trying to go to dashboard
-      // FORCE them to visit pricing first
-      if (userId && !tier && pathname.startsWith('/dashboard')) {
-        router.push('/pricing');
-      }
+      setApiAuthContext(userId);
     }
     
     if (isLoaded && !userId && pathname !== '/' && pathname !== '/pricing') {

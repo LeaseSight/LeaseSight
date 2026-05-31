@@ -108,9 +108,9 @@ export function BentoLandingPage() {
       {/* Mini Feature: Security */}
       <div className="md:col-span-4 group relative rounded-3xl border border-white/5 bg-white/5 backdrop-blur-xl p-8 transition-all hover:border-white/20">
         <ShieldCheck className="w-6 h-6 text-emerald-400 mb-4" />
-        <h3 className="text-lg font-bold mb-2">BYOK Security</h3>
+        <h3 className="text-lg font-bold mb-2">Managed Security</h3>
         <p className="text-white/40 text-xs font-mono leading-relaxed">
-          Enterprise-grade encryption with Bring-Your-Own-Key support for OpenAI & Azure.
+          Server-managed Gemini, Azure OCR, and Pinecone access with no browser-side keys.
         </p>
       </div>
 
