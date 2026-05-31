@@ -22,17 +22,18 @@ import re
 import logging
 from typing import Any, Dict, List, Optional
 
+import requests
+
 # Load .env from workspace root and api/ (api/.env takes precedence for prod secrets)
 _ROOT_ENV = os.path.join(os.path.dirname(__file__), "..", ".env")
 _API_ENV  = os.path.join(os.path.dirname(__file__), "..", "api", ".env")
-load_dotenv(_ROOT_ENV, override=True)
 load_dotenv(_API_ENV, override=True)
+load_dotenv(_ROOT_ENV, override=True)
 os.environ["GOOGLE_API_KEY"] = os.getenv("GEMINI_API_KEY", "")
 
 try:
     from google import genai
     from google.genai import types as genai_types
-    from google.oauth2.credentials import Credentials
     _GENAI_AVAILABLE = True
 except ImportError:
     _GENAI_AVAILABLE = False
@@ -43,7 +44,8 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-CHAT_MODEL   = "gemini-2.0-flash"
+CHAT_MODEL   = "gemini-3.5-flash"
+GEMINI_REST_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
 # Backoff parameters
 _BASE_WAIT   = 8    # seconds (first retry sleep)
@@ -93,7 +95,7 @@ def _looks_like_ai_studio_key(value: str) -> bool:
     return value.startswith("AIza")
 
 
-def _looks_like_oauth_token(value: str) -> bool:
+def _uses_rest_key_transport(value: str) -> bool:
     return value.startswith("AQ.")
 
 
@@ -131,32 +133,9 @@ class GeminiChatClient:
 
         os.environ["GEMINI_API_KEY"] = self._api_key
         os.environ["GOOGLE_API_KEY"] = self._api_key
-        self._auth_mode = "vertex_oauth" if _looks_like_oauth_token(self._api_key) else "ai_studio_api_key"
-        if self._auth_mode == "vertex_oauth":
-            project = (
-                os.getenv("GOOGLE_CLOUD_PROJECT")
-                or os.getenv("GEMINI_PROJECT_ID")
-                or os.getenv("GOOGLE_PROJECT_ID")
-            )
-            location = os.getenv("GOOGLE_CLOUD_LOCATION") or os.getenv("GEMINI_LOCATION") or "us-central1"
-            if not project:
-                raise ValueError(
-                    "GEMINI_API_KEY starts with 'AQ.', so it looks like an OAuth/Vertex access token. "
-                    "Set GOOGLE_CLOUD_PROJECT or GEMINI_PROJECT_ID in .env to use Vertex Gemini, "
-                    "or replace GEMINI_API_KEY with a standard AI Studio key that starts with 'AIza'."
-                )
-            credentials = Credentials(token=self._api_key)
-            self._client = genai.Client(
-                vertexai=True,
-                credentials=credentials,
-                project=project,
-                location=location,
-                http_options=genai_types.HttpOptions(
-                    api_version=os.getenv("GEMINI_VERTEX_API_VERSION", "v1"),
-                    headers={"Authorization": f"Bearer {self._api_key}"},
-                    timeout=int(os.getenv("GEMINI_TIMEOUT_MS", "30000")),
-                ),
-            )
+        self._auth_mode = "rest_api_key" if _uses_rest_key_transport(self._api_key) else "ai_studio_api_key"
+        if self._auth_mode == "rest_api_key":
+            self._client = None
         else:
             if not _looks_like_ai_studio_key(self._api_key):
                 logger.warning(
@@ -173,6 +152,39 @@ class GeminiChatClient:
         logger.info("[GeminiChatClient] Initialized with model=%s", self._model_name)
 
     # ------------------------------------------------------------------ #
+
+    def _rest_generate(self, user_content: str, system_prompt: Optional[str] = None,
+                       json_mode: bool = False, max_output_tokens: Optional[int] = None) -> str:
+        model_name = self._model_name.replace("models/", "", 1)
+        url = f"{GEMINI_REST_BASE_URL}/models/{model_name}:generateContent"
+        payload: Dict[str, Any] = {
+            "contents": [{"role": "user", "parts": [{"text": user_content}]}],
+            "generationConfig": {
+                "temperature": self._temperature,
+            },
+        }
+        if system_prompt:
+            payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
+        if json_mode:
+            payload["generationConfig"]["responseMimeType"] = "application/json"
+        if max_output_tokens:
+            payload["generationConfig"]["maxOutputTokens"] = max_output_tokens
+
+        response = requests.post(
+            url,
+            params={"key": self._api_key},
+            headers={"Content-Type": "application/json"},
+            json=payload,
+            timeout=int(os.getenv("GEMINI_REST_TIMEOUT_SECONDS", "45")),
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(f"Gemini REST error {response.status_code}: {response.text[:1000]}")
+
+        data = response.json()
+        try:
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception as exc:
+            raise RuntimeError(f"Gemini REST returned an unexpected response: {data}") from exc
 
     def complete_json(
         self,
@@ -191,12 +203,15 @@ class GeminiChatClient:
         last_exc: Optional[Exception] = None
         for attempt in range(self._max_retries):
             try:
-                response = self._client.models.generate_content(
-                    model=self._model_name,
-                    contents=user_content,
-                    config=config,
-                )
-                raw     = response.text if response.text else ""
+                if self._auth_mode == "rest_api_key":
+                    raw = self._rest_generate(user_content, system_prompt=system_prompt, json_mode=True)
+                else:
+                    response = self._client.models.generate_content(
+                        model=self._model_name,
+                        contents=user_content,
+                        config=config,
+                    )
+                    raw = response.text if response.text else ""
                 cleaned = _strip_json_fence(raw)
                 if not cleaned:
                     raise ValueError(f"{agent_name}: Empty response from Gemini")
@@ -240,6 +255,13 @@ class GeminiChatClient:
 
     def smoke_test(self) -> str:
         """Perform a real Gemini generation call for connection diagnostics."""
+        if self._auth_mode == "rest_api_key":
+            text = self._rest_generate("Reply with the word ok.", max_output_tokens=64)
+            text = (text or "").strip()
+            if not text:
+                raise RuntimeError("Gemini smoke test returned an empty response.")
+            return text
+
         response = self._client.models.generate_content(
             model=self._model_name,
             contents="Reply with the word ok.",

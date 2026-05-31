@@ -7,8 +7,8 @@ import sys, json, sqlite3, uuid, hashlib, io, time
 # 1. HARDENED PATH RESOLUTION
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, BASE_DIR)
-load_dotenv(os.path.join(BASE_DIR, ".env"), override=True)
 load_dotenv(os.path.join(BASE_DIR, "api", ".env"), override=True)
+load_dotenv(os.path.join(BASE_DIR, ".env"), override=True)
 os.environ["GOOGLE_API_KEY"] = os.getenv("GEMINI_API_KEY", "")
 
 def clean_secret(value):
