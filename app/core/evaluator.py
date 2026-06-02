@@ -1,11 +1,22 @@
+import os
+# Wipe it completely out of system memory immediately
+os.environ.pop("GOOGLE_API_KEY", None)
+os.environ.pop("GEMINI_API_KEY", None)
+
+# Force the system key to match our working REST token from .env
+# If your code uses dotenv, manually load it here first
+from dotenv import load_dotenv
+load_dotenv()
+
+working_key = os.getenv("GEMINI_API_KEY", "")
+os.environ["GOOGLE_API_KEY"] = working_key
+os.environ["GEMINI_API_KEY"] = working_key
+
 import asyncio
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
-
-from dotenv import load_dotenv
 
 
 load_dotenv()
@@ -115,7 +126,9 @@ def _configure_gemini_model(deps: Dict[str, Any], model_name: str = GEMINI_EVAL_
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is required to run DeepEval evaluations.")
 
+    os.environ.pop("GOOGLE_API_KEY", None)
     os.environ["GOOGLE_API_KEY"] = api_key
+    os.environ["GEMINI_API_KEY"] = api_key
     return deps["GeminiModel"](
         model_name=model_name,
         api_key=api_key,

@@ -3,6 +3,11 @@ export interface Finding {
   label: string;
   value: string;
   evidence_quote: string;
+  verification_status?: string;
+  verified?: boolean;
+  is_verified?: boolean;
+  grounded?: boolean;
+  groundedness?: number;
 }
 
 export interface Obligation {
@@ -13,8 +18,10 @@ export interface Obligation {
 
 export interface LiveTrustScores {
   faithfulness: number;
-  relevance: number;
+  answer_relevance?: number;
+  relevance?: number;
   groundedness_index: number;
+  is_trusted?: boolean;
 }
 
 export interface AuditResult {

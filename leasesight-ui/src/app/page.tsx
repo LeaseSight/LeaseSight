@@ -143,18 +143,20 @@ export default function LandingPage() {
             <button onClick={() => setModal('contact')} className="transition hover:text-[#1A1A1A]">Contact Us</button>
           </div>
           <div className="flex items-center gap-3">
-            {!userId ? (
+            {!userId && (
               <>
-                <SignInButton mode="modal">
-                  <button className="hidden border border-slate-300 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#1A1A1A] transition hover:-translate-y-0.5 hover:border-[#1A1A1A] sm:block">
-                    Login
-                  </button>
-                </SignInButton>
-                <Link href="/dashboard/audit" className="bg-[#1A1A1A] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-white transition hover:-translate-y-0.5 hover:bg-slate-700">
-                  Get Started
-                </Link>
+              <SignInButton mode="modal">
+                <button className="hidden border border-slate-300 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#1A1A1A] transition hover:-translate-y-0.5 hover:border-[#1A1A1A] sm:block">
+                  Login
+                </button>
+              </SignInButton>
+              <Link href="/dashboard/audit" className="bg-[#1A1A1A] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-white transition hover:-translate-y-0.5 hover:bg-slate-700">
+                Get Started
+              </Link>
               </>
-            ) : (
+            )}
+
+            {userId && (
               <>
                 <Link href="/dashboard/audit" className="bg-[#1A1A1A] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-white transition hover:-translate-y-0.5 hover:bg-slate-700">
                   Dashboard

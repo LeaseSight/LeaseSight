@@ -12,6 +12,7 @@ import { CommitModal } from './CommitModal';
 import { ObligationTimeline } from './ObligationTimeline';
 import { AuditSkeleton } from './AuditSkeleton';
 import { FileUploadStatus } from './FileUploadStatus';
+import { BenchmarkPanel } from './BenchmarkPanel';
 
 interface LeftPaneProps {
   selectedDoc: string | null;
@@ -40,6 +41,7 @@ export function LeftPane({
   const [pipelineStatus, setPipelineStatus] = useState<string | null>(null);
   const [pipelineError, setPipelineError] = useState<string | undefined>();
   const [auditStatus, setAuditStatus] = useState('Analyzing Clauses...');
+  const [showBenchmarks, setShowBenchmarks] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const statusCycleRef = useRef<NodeJS.Timeout | null>(null);
   const analysisLoading = isAuditing || isAuditRunning;
@@ -185,6 +187,18 @@ export function LeftPane({
     }
   };
 
+  const isFindingVerified = (finding: AuditResult['findings'][number]) => {
+    const status = String(finding.verification_status || '').toLowerCase();
+    return Boolean(
+      finding.verified ||
+      finding.is_verified ||
+      finding.grounded ||
+      status.includes('verified') ||
+      status.includes('grounded') ||
+      (auditResult?.live_trust_scores?.is_trusted && (auditResult.live_trust_scores.groundedness_index ?? 0) >= 0.98)
+    );
+  };
+
   return (
     <div className="flex flex-col h-full">
       {/* Document Selector */}
@@ -279,6 +293,22 @@ export function LeftPane({
 
       {/* Scrollable Results Area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="rounded-lg border" style={{ borderColor: 'var(--border-default)', background: 'var(--bg-card)' }}>
+          <button
+            onClick={() => setShowBenchmarks(value => !value)}
+            className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.12em]"
+            style={{ color: 'var(--text-primary)' }}
+          >
+            <span>📊 Academic Benchmarks & Evaluation</span>
+            <ChevronDown className={`h-4 w-4 transition-transform ${showBenchmarks ? 'rotate-180' : ''}`} />
+          </button>
+          {showBenchmarks && (
+            <div className="border-t p-3" style={{ borderColor: 'var(--border-default)' }}>
+              <BenchmarkPanel />
+            </div>
+          )}
+        </div>
+
         {analysisLoading ? (
           <AuditSkeleton />
         ) : auditResult ? (
@@ -320,7 +350,7 @@ export function LeftPane({
               </h3>
               <div className="space-y-2">
                 {auditResult.findings.map((f, i) => (
-                  <FindingCard key={i} finding={f} index={i} onLocate={handleLocateSnippet} />
+                  <FindingCard key={i} finding={f} index={i} onLocate={handleLocateSnippet} verified={isFindingVerified(f)} />
                 ))}
               </div>
             </div>

@@ -13,6 +13,8 @@
 
 import os
 from dotenv import load_dotenv
+if "GOOGLE_API_KEY" in os.environ:
+    del os.environ["GOOGLE_API_KEY"]
 load_dotenv(override=True)
 os.environ["GOOGLE_API_KEY"] = os.getenv("GEMINI_API_KEY", "")
 
@@ -29,6 +31,8 @@ _ROOT_ENV = os.path.join(os.path.dirname(__file__), "..", ".env")
 _API_ENV  = os.path.join(os.path.dirname(__file__), "..", "api", ".env")
 load_dotenv(_API_ENV, override=True)
 load_dotenv(_ROOT_ENV, override=True)
+if "GOOGLE_API_KEY" in os.environ:
+    del os.environ["GOOGLE_API_KEY"]
 os.environ["GOOGLE_API_KEY"] = os.getenv("GEMINI_API_KEY", "")
 
 try:

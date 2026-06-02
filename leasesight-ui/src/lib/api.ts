@@ -119,6 +119,8 @@ export const api = {
 
   evaluation: () => fetchJSON<EvaluationSummary>('/api/v1/evaluation'),
 
+  getBenchmarkReport: () => fetchJSON<any>('/api/v1/benchmark-report'),
+
   documents: () => fetchJSON<{ documents: string[]; count: number }>('/api/documents'),
 
   audit: (file_name: string) =>

@@ -22,11 +22,11 @@ from typing import List, Dict, Any
 from dotenv import load_dotenv
 
 _ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(_ROOT / ".env")
-load_dotenv(_ROOT / "api" / ".env")
+load_dotenv(_ROOT / "api" / ".env", override=True)
+load_dotenv(_ROOT / ".env", override=True)
 
 from pinecone import Pinecone
-from scripts.processor import get_local_embedding
+from scripts.processor import get_local_embedding, _truncate_metadata
 
 # ---------------------------------------------------------------------------
 # CONFIG
@@ -35,6 +35,7 @@ from scripts.processor import get_local_embedding
 INDEX_NAME   = "leasesight-index"   # Must be at dim=768
 UPSERT_BATCH = 50                   # Vectors per Pinecone upsert call
 JSON_MAP_DIR = _ROOT / "data" / "json_maps"
+DEFAULT_NAMESPACE = os.getenv("REINDEX_NAMESPACE", "academic_baseline")
 
 # ---------------------------------------------------------------------------
 # HELPERS
@@ -54,7 +55,7 @@ def _build_text_lookup() -> Dict[str, str]:
                     line.get("content", "") for line in page.get("lines", [])
                 )
                 if page_text.strip():
-                    lookup[f"{file_name}_p{page_num}"] = page_text
+                    lookup[f"{file_name}_p{page_num}_c0"] = page_text
         except Exception as e:
             print(f"  [WARN] Could not build lookup for {json_file.name}: {e}")
     return lookup
@@ -73,16 +74,22 @@ def _build_metadata_lookup() -> Dict[str, Dict[str, Any]]:
                 page_text = " ".join(
                     line.get("content", "") for line in page.get("lines", [])
                 )
-                coords = json.dumps(
-                    page["lines"][0]["bounding_box"] if page.get("lines") else []
-                )
-                vid = f"{file_name}_p{page_num}"
-                lookup[vid] = {
-                    "file_name":   file_name,
-                    "page_number": page_num,
-                    "text":        page_text[:2000],
-                    "coords":      coords,
-                }
+                coordinates = [
+                    {
+                        "text": line.get("content", "")[:240],
+                        "bounding_box": line.get("bounding_box", []),
+                    }
+                    for line in page.get("lines", [])
+                ]
+                vid = f"{file_name}_p{page_num}_c0"
+                lookup[vid] = _truncate_metadata({
+                    "filename": file_name,
+                    "file_name": file_name,
+                    "page_number": int(page_num) if str(page_num).isdigit() else page_num,
+                    "chunk_index": 0,
+                    "text": page_text,
+                    "coordinates_json": json.dumps(coordinates, ensure_ascii=True, separators=(",", ":")),
+                })
         except Exception as e:
             print(f"  [WARN] Could not build metadata for {json_file.name}: {e}")
     return lookup
@@ -97,7 +104,7 @@ def _chunks(lst: list, n: int):
 # MAIN
 # ---------------------------------------------------------------------------
 
-def reindex(dry_run: bool = False):
+def reindex(dry_run: bool = False, namespace: str = DEFAULT_NAMESPACE):
     """
     Embed every page from local JSON maps using all-mpnet-base-v2 and
     upsert into the 768-dim Pinecone index.
@@ -105,6 +112,7 @@ def reindex(dry_run: bool = False):
     print("=" * 60)
     print("  LeaseSight -- Pinecone Re-indexing (Local Embeddings)")
     print("  Model: sentence-transformers/all-mpnet-base-v2 (768-dim)")
+    print(f"  Namespace: {namespace}")
     print("=" * 60)
 
     # --- Pinecone ---
@@ -162,7 +170,7 @@ def reindex(dry_run: bool = False):
         if not upsert_buffer:
             return
         try:
-            index.upsert(vectors=upsert_buffer, namespace="academic_baseline")
+            index.upsert(vectors=upsert_buffer, namespace=namespace)
             success_count += len(upsert_buffer)
             print(f"  [Pinecone] Upserted batch of {len(upsert_buffer):>3} | total: {success_count}")
         except Exception as e:
@@ -210,5 +218,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--dry-run", action="store_true",
                         help="Print plan without writing to Pinecone.")
+    parser.add_argument("--namespace", default=DEFAULT_NAMESPACE,
+                        help=f"Pinecone namespace to write. Default: {DEFAULT_NAMESPACE}")
     args = parser.parse_args()
-    reindex(dry_run=args.dry_run)
+    reindex(dry_run=args.dry_run, namespace=args.namespace)

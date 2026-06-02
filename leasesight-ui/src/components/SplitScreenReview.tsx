@@ -187,7 +187,7 @@ export function SplitScreenReview({ batchId }: { batchId: string }) {
         <RightPane
           selectedDoc={selectedDoc}
           annotations={annotations}
-          targetPage={targetPage}
+          targetPage={targetPage ?? 1}
         />
       </div>
     </div>

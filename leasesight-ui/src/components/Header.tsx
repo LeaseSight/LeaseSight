@@ -177,21 +177,21 @@ export function Header({ isAuditing, onToggleNetwork, documents, onSelectDoc }: 
           id="settings-nav-btn"
           className="relative flex items-center gap-2 px-2.5 py-1.5 transition-all hover:-translate-y-0.5 hover:opacity-80"
           style={{
-            background: 'rgba(5,150,105,0.08)',
-            border: '1px solid rgba(5,150,105,0.3)',
+            background: isConnected ? 'rgba(5,150,105,0.08)' : 'rgba(220,38,38,0.08)',
+            border: isConnected ? '1px solid rgba(5,150,105,0.3)' : '1px solid rgba(220,38,38,0.3)',
           }}
-          title="System Tier: Enterprise Server Secured"
+          title={isConnected ? 'Managed backend connected' : 'Managed backend needs attention'}
         >
-          <Settings className="w-3.5 h-3.5" style={{ color: 'var(--accent-emerald)' }} />
+          <Settings className="w-3.5 h-3.5" style={{ color: isConnected ? 'var(--accent-emerald)' : 'var(--accent-red)' }} />
           
           <span className="text-[10px] font-semibold tracking-wide hidden lg:inline"
-                style={{ color: 'var(--accent-emerald)' }}>
-            ENTERPRISE SECURED
+                style={{ color: isConnected ? 'var(--accent-emerald)' : 'var(--accent-red)' }}>
+            {isConnected ? 'BACKEND' : 'CHECK API'}
           </span>
 
           {/* Status Dot */}
           <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full"
-                style={{ background: 'var(--accent-emerald)' }} />
+                style={{ background: isConnected ? 'var(--accent-emerald)' : 'var(--accent-red)' }} />
         </Link>
       </div>
     </header>

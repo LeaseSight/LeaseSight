@@ -18,7 +18,7 @@ export default function LoginPage() {
           </div>
         </section>
         <section className="flex items-center justify-center p-6">
-          <SignIn routing="path" path="/login" signUpUrl="/login" afterSignInUrl="/choose-package" afterSignUpUrl="/choose-package" />
+          <SignIn routing="path" path="/login" signUpUrl="/login" fallbackRedirectUrl="/choose-package" />
         </section>
       </div>
     </main>

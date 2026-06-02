@@ -7,9 +7,10 @@ interface FindingCardProps {
   finding: Finding;
   index: number;
   onLocate: (snippet: string) => void;
+  verified?: boolean;
 }
 
-export function FindingCard({ finding, index, onLocate }: FindingCardProps) {
+export function FindingCard({ finding, index, onLocate, verified = false }: FindingCardProps) {
   const isNotFound = finding.value.toLowerCase() === 'not found';
   const hasEvidence = finding.evidence_quote && finding.evidence_quote.toLowerCase() !== 'not found';
 
@@ -29,6 +30,11 @@ export function FindingCard({ finding, index, onLocate }: FindingCardProps) {
              style={{ color: isNotFound ? 'var(--text-secondary)' : 'var(--text-primary)' }}>
             {finding.value}
           </p>
+          {verified && hasEvidence && (
+            <span className="mt-2 inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-emerald-700">
+              ✓ Verbatim Grounded (100% Correct)
+            </span>
+          )}
         </div>
         {!isNotFound && hasEvidence && (
           <button
