@@ -1,13 +1,25 @@
 import type { NextConfig } from "next";
 
+const clerkPublishableKey =
+  process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY || process.env.CLERK_PUBLISHABLE_KEY || '';
+
+if (process.env.VERCEL === '1' && !clerkPublishableKey) {
+  throw new Error(
+    'Missing NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY on Vercel. ' +
+      'Add it under Project → Settings → Environment Variables (Production + Preview), then redeploy. ' +
+      '.env.local is not uploaded to Vercel.',
+  );
+}
+
 const nextConfig: NextConfig = {
   output: 'export',
   env: {
-    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:
-      process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY || process.env.CLERK_PUBLISHABLE_KEY || '',
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: clerkPublishableKey,
+    NEXT_PUBLIC_API_URL:
+      process.env.NEXT_PUBLIC_API_URL ||
+      (process.env.VERCEL === '1' ? 'https://api.leasesights.tech' : 'http://localhost:8080'),
   },
   typescript: {
-    // This allows the build to succeed even with the error you're seeing
     ignoreBuildErrors: true,
   },
   // @ts-ignore
