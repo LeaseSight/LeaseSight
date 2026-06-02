@@ -5,12 +5,12 @@
 set -e
 
 echo "=========================================="
-echo "LeaseSight Production Deployment (v1.3.4)"
+echo "LeaseSight Production Deployment (v1.3.5)"
 echo "=========================================="
 echo ""
 
 # Step 1: Update Caddy configuration
-echo "[1/4] Updating Caddy configuration..."
+echo "[1/5] Updating Caddy configuration..."
 sudo tee /etc/caddy/Caddyfile > /dev/null << 'EOF'
 api.leasesights.tech {
     # STRIP all incoming CORS headers from backend (to remove wildcard)
@@ -59,7 +59,7 @@ echo "  ✓ Caddy updated and reloaded"
 echo ""
 
 # Step 2: Update application code
-echo "[2/4] Pulling latest code from git..."
+echo "[2/5] Pulling latest code from git..."
 cd /home/azureuser/LeaseSight
 git fetch origin main
 git reset --hard origin/main
@@ -67,13 +67,13 @@ echo "  ✓ Code updated"
 echo ""
 
 # Step 3: Rebuild Docker image
-echo "[3/4] Rebuilding Docker image..."
+echo "[3/5] Rebuilding Docker image..."
 docker build --no-cache -t leasesight-backend:latest .
 echo "  ✓ Docker image built"
 echo ""
 
 # Step 4: Restart container
-echo "[4/4] Restarting backend container..."
+echo "[4/5] Restarting backend container..."
 docker stop leasesight-api 2>/dev/null || true
 docker rm leasesight-api 2>/dev/null || true
 docker run -d \
@@ -99,6 +99,30 @@ else
     exit 1
 fi
 
+echo "[5/5] Building and syncing frontend UI layout..."
+cd /home/azureuser/LeaseSight/leasesight-ui
+if [ -f .env.local ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env.local
+  set +a
+elif [ -f ../.env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source ../.env
+  set +a
+fi
+if [ -z "${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}" ]; then
+  echo "  ✗ NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is required for frontend build"
+  exit 1
+fi
+npm ci
+npm run build
+sudo rm -rf /var/www/leasesight-ui/*
+sudo cp -r out/* /var/www/leasesight-ui/
+echo "Frontend sync complete! Restarting Caddy server..."
+sudo systemctl restart caddy
+
 echo ""
 echo "=========================================="
 echo "✓ DEPLOYMENT COMPLETE"
@@ -110,4 +134,7 @@ echo "  • Caddy sets correct specific-origin headers"
 echo "  • FastAPI middleware removes any CORS headers it tries to send"
 echo "  • Result: Single, clean CORS header sent to browser"
 echo ""
-echo "Test: Open https://www.leasesights.tech and check console for CORS errors"
+echo "Frontend:"
+echo "  • Next.js static export built and synced to /var/www/leasesight-ui"
+echo ""
+echo "Test: Open https://www.leasesights.tech and hard-refresh (Ctrl+Shift+R)"

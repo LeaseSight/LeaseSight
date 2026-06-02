@@ -6,21 +6,41 @@ import { useEffect } from 'react';
 import { Loader2, ShieldAlert } from 'lucide-react';
 import { setApiAuthContext } from '@/lib/api';
 
+function hasSelectedPackage(): boolean {
+  if (typeof document === 'undefined') return false;
+  return document.cookie.split(';').some(c => c.trim() === 'ls_has_selected_package=true');
+}
+
+const PUBLIC_PATHS = ['/', '/pricing', '/login'];
+
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const { isLoaded, userId } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
 
   useEffect(() => {
-    if (isLoaded) {
-      setApiAuthContext(userId);
-    }
-    
-    if (isLoaded && !userId && pathname !== '/' && pathname !== '/pricing') {
-      // Allow landing and pricing, but protect dashboard
-      if (pathname.startsWith('/dashboard')) {
-        router.push('/');
+    if (!isLoaded) return;
+
+    setApiAuthContext(userId);
+
+    const isProtected =
+      pathname.startsWith('/dashboard') || pathname.startsWith('/settings');
+    const isPackageRoute = pathname.startsWith('/choose-package');
+
+    if (!userId) {
+      if (isProtected || isPackageRoute) {
+        router.replace('/login');
       }
+      return;
+    }
+
+    if (isPackageRoute && hasSelectedPackage()) {
+      router.replace('/dashboard/audit');
+      return;
+    }
+
+    if (isProtected && !hasSelectedPackage()) {
+      router.replace(`/choose-package?returnTo=${encodeURIComponent(pathname)}`);
     }
   }, [isLoaded, userId, pathname, router]);
 
@@ -33,8 +53,10 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // If on a protected route and not logged in
-  if (!userId && pathname.startsWith('/dashboard')) {
+  if (
+    !userId &&
+    (pathname.startsWith('/dashboard') || pathname.startsWith('/settings') || pathname.startsWith('/choose-package'))
+  ) {
     return (
       <div className="h-screen w-screen flex flex-col items-center justify-center bg-[#030712] p-8 text-center">
         <ShieldAlert className="w-12 h-12 text-red-500 mb-6" />
