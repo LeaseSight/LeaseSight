@@ -1,5 +1,8 @@
-# Secrets
+# Secrets (never commit)
 .env
+.env.production
+.env.local
+leasesight-ui/.env.local
 
 # Large/Private Data
 data/

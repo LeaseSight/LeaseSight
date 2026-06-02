@@ -79,7 +79,7 @@ docker rm leasesight-api 2>/dev/null || true
 docker run -d \
   --name leasesight-api \
   -p 8080:8080 \
-  --env-file /home/azureuser/LeaseSight/.env \
+  --env-file /home/azureuser/LeaseSight/.env.production \
   -v /home/azureuser/LeaseSight/data:/app/data \
   --restart unless-stopped \
   leasesight-backend:latest
@@ -101,21 +101,25 @@ fi
 
 echo "[5/5] Building and syncing frontend UI layout..."
 cd /home/azureuser/LeaseSight/leasesight-ui
-if [ -f .env.local ]; then
-  set -a
-  # shellcheck disable=SC1091
-  source .env.local
-  set +a
-elif [ -f ../.env ]; then
-  set -a
-  # shellcheck disable=SC1091
-  source ../.env
-  set +a
-fi
-if [ -z "${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}" ]; then
-  echo "  ✗ NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is required for frontend build"
+ENV_FILE="../.env.production"
+if [ ! -f "$ENV_FILE" ]; then
+  echo "  ✗ Missing $ENV_FILE (production keys). Do not use .env.local on the server."
   exit 1
 fi
+set -a
+# shellcheck disable=SC1091
+source "$ENV_FILE"
+set +a
+if [ -z "${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}" ]; then
+  echo "  ✗ NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is required in .env.production"
+  exit 1
+fi
+case "$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" in
+  pk_test_*)
+    echo "  ✗ Refusing to deploy with pk_test_ keys. Use pk_live_ in .env.production"
+    exit 1
+    ;;
+esac
 npm ci
 npm run build
 sudo rm -rf /var/www/leasesight-ui/*
