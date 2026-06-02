@@ -41,3 +41,9 @@ Creating turbopack project {
  GET /dashboard/audit 200 in 400ms (next.js: 7ms, proxy.ts: 267ms, application-code: 127ms)
  GET /settings 200 in 81ms (next.js: 9ms, proxy.ts: 27ms, application-code: 45ms)
  GET /dashboard/audit 200 in 60ms (next.js: 5ms, proxy.ts: 13ms, application-code: 42ms)
+ GET /dashboard/audit 200 in 1464ms (next.js: 17ms, proxy.ts: 1092ms, application-code: 355ms)
+ GET / 200 in 130ms (next.js: 13ms, proxy.ts: 31ms, application-code: 86ms)
+ GET /dashboard/audit 200 in 145ms (next.js: 11ms, proxy.ts: 31ms, application-code: 103ms)
+ GET /settings 200 in 122ms (next.js: 14ms, proxy.ts: 45ms, application-code: 64ms)
+ GET /dashboard/audit 200 in 114ms (next.js: 10ms, proxy.ts: 32ms, application-code: 72ms)
+[?25h

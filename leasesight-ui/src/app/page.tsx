@@ -3,32 +3,35 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { SignInButton, UserButton, useAuth } from '@clerk/nextjs';
-import { ArrowRight, Binary, Brackets, FileSearch, Gauge, Layers3, Loader2, X } from 'lucide-react';
+import { ArrowRight, Binary, Cpu, Database, Loader2, Network, X } from 'lucide-react';
 import { BrandLogo } from '@/components/BrandLogo';
+import { LegalDrawer } from '@/components/LegalDrawer';
+import type { LegalPanel } from '@/content/legal';
 import { showErrorToast, showSuccessToast } from '@/lib/errorMessages';
 
 type ModalName = 'about' | 'contact' | null;
 
-const features = [
+const offerCards = [
   {
-    icon: FileSearch,
-    title: 'Surgical AI Extraction',
-    copy: 'Real-time extraction of lessor, lease amount, tenure, and operational terms from dense commercial PDFs.',
+    icon: Network,
+    tag: 'Active Ingestion',
+    title: 'Asynchronous Compliance Pipelines',
+    copy:
+      'File parsing runs on decoupled background workers so the browser never blocks on long OCR or inference chains. Jobs enqueue server-side while your session stays responsive—eliminating proxy timeouts and generic "Failed to Fetch" errors during heavy audits.',
   },
   {
-    icon: Brackets,
-    title: 'Verbatim Visual Grounding',
-    copy: 'Direct PDF highlighting with quote-level evidence and coordinate normalization built for review workflows.',
+    icon: Database,
+    tag: 'Deterministic Validation',
+    title: 'Local Embedding Vector Space',
+    copy:
+      'Clause chunks embed with all-mpnet-base-v2 (768-d) entirely on local threads. Cosine similarity and retrieval stay on your machine for zero marginal embedding cost, stronger privacy boundaries, and predictable latency without shipping full contracts to cloud vector stores.',
   },
   {
-    icon: Gauge,
-    title: 'Intelligent Risk Scoring',
-    copy: 'Automated detection of governing law conflicts, notice gaps, high-interest caps, and unusual commercial exposure.',
-  },
-  {
-    icon: Layers3,
-    title: 'Industrial MLOps',
-    copy: 'Powered by Azure Document Intelligence and Pinecone Vector RAG for scalable archive ingestion.',
+    icon: Cpu,
+    tag: 'Structured Output',
+    title: 'Multi-Agent JSON Ingestion',
+    copy:
+      'Unstructured legal prose is parsed into schema-bound JSON against a 20-point validation matrix. Groq LPU-backed Llama-3.3-70B agents cross-check fields, reconcile conflicts, and return review-ready findings with quote-level evidence in seconds.',
   },
 ];
 
@@ -75,7 +78,15 @@ function Modal({ name, onClose }: { name: ModalName; onClose: () => void }) {
   );
 }
 
-function ContactForm({ onSuccess }: { onSuccess?: () => void }) {
+function ContactForm({ onSuccess, dark }: { onSuccess?: () => void; dark?: boolean }) {
+  const field =
+    'w-full border px-3 py-3 text-sm outline-none transition ' +
+    (dark
+      ? 'border-white/15 bg-white/5 text-white placeholder:text-slate-500 focus:border-white'
+      : 'border-slate-300 bg-white text-[#1A1A1A] focus:border-[#1A1A1A]');
+  const btn = dark
+    ? 'mt-1 w-full border border-white bg-white px-4 py-3 text-sm font-semibold text-[#1A1A1A] transition hover:-translate-y-0.5 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50'
+    : 'mt-2 bg-[#1A1A1A] px-5 py-3 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50';
   const [email, setEmail] = useState('');
   const [industry, setIndustry] = useState('');
   const [companySize, setCompanySize] = useState('');
@@ -111,18 +122,35 @@ function ContactForm({ onSuccess }: { onSuccess?: () => void }) {
 
   return (
     <form onSubmit={submit} className="grid gap-3">
-      <input value={email} onChange={e => setEmail(e.target.value)} className="border border-slate-300 bg-white px-3 py-3 text-sm outline-none transition focus:border-[#1A1A1A]" placeholder="Work email" />
-      <input value={industry} onChange={e => setIndustry(e.target.value)} className="border border-slate-300 bg-white px-3 py-3 text-sm outline-none transition focus:border-[#1A1A1A]" placeholder="Industry" />
-      <select value={companySize} onChange={e => setCompanySize(e.target.value)} className="border border-slate-300 bg-white px-3 py-3 text-sm text-slate-500 outline-none transition focus:border-[#1A1A1A]">
+      <input value={email} onChange={e => setEmail(e.target.value)} className={field} placeholder="Work email" />
+      <input value={industry} onChange={e => setIndustry(e.target.value)} className={field} placeholder="Industry" />
+      <select
+        value={companySize}
+        onChange={e => setCompanySize(e.target.value)}
+        className={field + (dark ? ' text-slate-300' : ' text-slate-500')}
+      >
         <option value="">Company Size</option>
         <option>1-50</option>
         <option>51-250</option>
         <option>251-1,000</option>
         <option>1,000+</option>
       </select>
-      <textarea value={message} onChange={e => setMessage(e.target.value)} className="min-h-28 border border-slate-300 bg-white px-3 py-3 text-sm outline-none transition focus:border-[#1A1A1A]" placeholder="Tell us about your lease audit workflow" />
-      <button disabled={submitting} type="submit" className="mt-2 bg-[#1A1A1A] px-5 py-3 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50">
-        {submitting ? <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Sending...</span> : 'Submit Inquiry'}
+      <textarea
+        value={message}
+        onChange={e => setMessage(e.target.value)}
+        className={field + ' min-h-24 resize-y'}
+        placeholder="Tell us about your lease audit workflow"
+      />
+      <button disabled={submitting} type="submit" className={btn}>
+        {submitting ? (
+          <span className="inline-flex items-center justify-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" /> Sending...
+          </span>
+        ) : dark ? (
+          'Request Briefing'
+        ) : (
+          'Submit Inquiry'
+        )}
       </button>
     </form>
   );
@@ -131,6 +159,7 @@ function ContactForm({ onSuccess }: { onSuccess?: () => void }) {
 export default function LandingPage() {
   const { userId } = useAuth();
   const [modal, setModal] = useState<ModalName>(null);
+  const [legalPanel, setLegalPanel] = useState<LegalPanel | null>(null);
 
   return (
     <main className="min-h-screen bg-[#F9FAFB] text-[#1A1A1A]">
@@ -196,14 +225,20 @@ export default function LandingPage() {
             <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">What We Offer</p>
             <h2 className="mt-4 text-4xl font-semibold tracking-tight text-[#1A1A1A]">A disciplined audit layer for lease-heavy operations.</h2>
           </div>
-          <div className="grid gap-px overflow-hidden border border-slate-200 bg-slate-200 md:grid-cols-2 lg:grid-cols-4">
-            {features.map(feature => {
-              const Icon = feature.icon;
+          <div className="grid gap-4 md:grid-cols-3">
+            {offerCards.map(card => {
+              const Icon = card.icon;
               return (
-                <article key={feature.title} className="bg-[#F9FAFB] p-6 transition hover:bg-white">
-                  <Icon className="mb-8 h-7 w-7 text-[#1A1A1A]" />
-                  <h3 className="text-lg font-semibold text-[#1A1A1A]">{feature.title}</h3>
-                  <p className="mt-4 text-sm leading-6 text-slate-500">{feature.copy}</p>
+                <article
+                  key={card.title}
+                  className="group border border-slate-200 bg-[#F9FAFB] p-6 transition hover:border-[#1A1A1A]/30 hover:bg-white"
+                >
+                  <span className="inline-block border border-slate-300 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                    {card.tag}
+                  </span>
+                  <Icon className="mt-6 mb-6 h-7 w-7 text-[#1A1A1A] transition group-hover:-translate-y-0.5" />
+                  <h3 className="text-lg font-semibold text-[#1A1A1A]">{card.title}</h3>
+                  <p className="mt-4 text-sm leading-7 text-slate-500">{card.copy}</p>
                 </article>
               );
             })}
@@ -211,41 +246,43 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <footer className="bg-[#1A1A1A] py-10 text-white">
-        <div className="enterprise-container grid gap-10 md:grid-cols-[1.2fr_1fr_0.8fr]">
-          <div>
+      <footer className="bg-[#1A1A1A] text-white">
+        <div className="enterprise-container grid gap-12 py-14 md:grid-cols-[1.15fr_1fr_0.75fr] md:items-start">
+          <div className="min-w-0">
             <BrandLogo className="text-white [&_span:last-child]:text-white" />
-            <p className="mt-6 max-w-md text-sm leading-6 text-slate-300">
+            <p className="mt-6 max-w-md text-sm leading-7 text-slate-300">
               LeaseSight is a technical legal-auditing platform built for high-stakes commercial logistics,
               industrial real estate, and document-heavy operating teams.
             </p>
           </div>
-          <form className="grid gap-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Contact Us</p>
-            <input className="border border-white/15 bg-white/5 px-3 py-3 text-sm outline-none transition placeholder:text-slate-500 focus:border-white" placeholder="Industry" />
-            <select className="border border-white/15 bg-white/5 px-3 py-3 text-sm text-slate-400 outline-none transition focus:border-white">
-              <option>Company Size</option>
-              <option>1-50</option>
-              <option>51-250</option>
-              <option>251-1,000</option>
-              <option>1,000+</option>
-            </select>
-            <button type="button" className="border border-white bg-white px-4 py-3 text-sm font-semibold text-[#1A1A1A] transition hover:-translate-y-0.5 hover:bg-slate-200">
-              Request Briefing
-            </button>
-          </form>
-          <div>
+          <div className="min-w-0 border border-white/10 bg-white/[0.03] p-5 md:p-6">
+            <p className="mb-4 text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Contact Us</p>
+            <ContactForm dark />
+          </div>
+          <div className="min-w-0 md:pt-1">
             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Quick Links</p>
-            <div className="mt-5 grid gap-3 text-sm text-slate-300">
-              <a className="transition hover:text-white" href="#">Terms of Service</a>
-              <a className="transition hover:text-white" href="#">Privacy Policy</a>
-              <a className="transition hover:text-white" href="#">Documentation</a>
+            <div className="mt-5 flex flex-col gap-3 text-sm text-slate-300">
+              <button type="button" className="text-left transition hover:text-white" onClick={() => setLegalPanel('terms')}>
+                Terms of Service
+              </button>
+              <button type="button" className="text-left transition hover:text-white" onClick={() => setLegalPanel('privacy')}>
+                Privacy Policy
+              </button>
+              <button type="button" className="text-left transition hover:text-white" onClick={() => setLegalPanel('documentation')}>
+                Documentation
+              </button>
             </div>
           </div>
+        </div>
+        <div className="border-t border-white/10">
+          <p className="enterprise-container py-5 text-center text-xs tracking-wide text-slate-500 md:text-left">
+            © 2026 LeaseSight Technologies. All rights reserved.
+          </p>
         </div>
       </footer>
 
       <Modal name={modal} onClose={() => setModal(null)} />
+      <LegalDrawer panel={legalPanel} onClose={() => setLegalPanel(null)} />
     </main>
   );
 }

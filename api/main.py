@@ -43,7 +43,7 @@ from pydantic import BaseModel
 from azure.ai.formrecognizer import DocumentAnalysisClient
 from azure.core.credentials import AzureKeyCredential
 from pinecone import Pinecone
-from scripts.gemini_client import GeminiChatClient
+from scripts.groq_client import GroqChatClient
 from scripts.processor import get_local_embedding
 from app.core.rag_engine import retrieve_dual_namespace
 
@@ -129,15 +129,12 @@ init_local_tables()
 
 async def get_api_keys(request: Request) -> AuthKeys:
     # Server-managed credentials only. Browser/BYOK headers are intentionally ignored.
-    gemini_key   = (
-        os.getenv("GEMINI_API_KEY")
-        or os.getenv("MANAGED_GEMINI_KEY")
-    )
+    groq_key     = os.getenv("GROQ_API_KEY")
     pinecone_key   = os.getenv("PINECONE_API_KEY")
     azure_key      = os.getenv("AZURE_KEY")
     azure_endpoint = os.getenv("AZURE_ENDPOINT")
     return AuthKeys(
-        openai_key=clean_secret(gemini_key),   # field reused; stores Gemini key
+        openai_key=clean_secret(groq_key),   # field reused; stores Groq API key
         pinecone_key=clean_secret(pinecone_key),
         azure_key=clean_secret(azure_key),
         azure_endpoint=clean_secret(azure_endpoint),
@@ -219,14 +216,14 @@ async def test_connection(keys: AuthKeys = Depends(get_api_keys)):
         if not keys.openai_key:
             return {"success": False, "status": "error", "message": "GEMINI_API_KEY is missing on the server."}
 
-        client = GeminiChatClient(api_key=keys.openai_key, max_retries=1)  # openai_key slot holds Gemini key
-        gemini_reply = client.smoke_test()
+        client = GroqChatClient(api_key=keys.openai_key, max_retries=1)  # openai_key slot holds Groq key
+        groq_reply = client.smoke_test()
         get_local_embedding("connection test")  # warms up local model, no API call
         return {
             "success": True,
             "status": "success",
-            "message": "Gemini and local embedding verified",
-            "gemini_reply": gemini_reply,
+            "message": "Groq and local embedding verified",
+            "groq_reply": groq_reply,
         }
     except Exception as e:
         return {"success": False, "status": "error", "message": str(e)}
@@ -365,11 +362,10 @@ def _run_background_live_verification(
     user_id: str = None,
 ):
     try:
-        gemini_client = GeminiChatClient(api_key=gemini_key)
+        groq_client = GroqChatClient(api_key=gemini_key)
     except Exception as e:
-        print(f"[LIVE_EVAL] Gemini unavailable; live verification skipped: {e}")
-        gemini_client = None
-
+        print(f"[LIVE_EVAL] Groq unavailable; live verification skipped: {e}")
+        groq_client = None
     try:
         pc    = Pinecone(api_key=pinecone_key)
         index = pc.Index("leasesight-index")
@@ -397,7 +393,7 @@ def _run_background_live_verification(
             if index:
                 report = run_full_audit(
                     file_name,
-                    gemini_client=gemini_client,
+                    gemini_client=groq_client,
                     pinecone_index=index,
                     user_id=user_id,
                 )
@@ -573,9 +569,9 @@ async def chat_endpoint(request: Request, keys: AuthKeys = Depends(get_api_keys)
             raise HTTPException(status_code=400, detail="query and file_name are required")
 
         try:
-            gemini_client = GeminiChatClient(api_key=keys.openai_key)
+            groq_client = GroqChatClient(api_key=keys.openai_key)
         except Exception as e:
-            gemini_client = None
+            groq_client = None
 
         try:
             pc = Pinecone(api_key=keys.pinecone_key)
@@ -596,7 +592,7 @@ async def chat_endpoint(request: Request, keys: AuthKeys = Depends(get_api_keys)
         if not context:
             context = _context_from_json_map(file_name)
 
-        if not gemini_client:
+        if not groq_client:
             return {
                 "answer": f"[Fallback Mode] The external AI service is unavailable. Here is the closest matching text from the document:\n\n{context[:1000]}...",
                 "source_text": context[:1000],
@@ -617,9 +613,9 @@ Answer the following query based ONLY on this context. Keep the answer professio
 Context: {context[:15000]}
 """
         try:
-            answer = gemini_client.complete(chat_prompt, query, "CHAT_AGENT")
+            answer = groq_client.complete(chat_prompt, query, "CHAT_AGENT")
         except Exception as e:
-            answer = f"[Fallback Mode] The external AI service threw an error ({e}). Here is the closest matching text:\n\n{context[:1000]}..."
+            answer = f"[Fallback Mode] Groq service error ({e}). Here is the closest matching text:\n\n{context[:1000]}..."
 
         return {
             "answer": answer,
@@ -648,10 +644,10 @@ async def start_audit(request: Request, keys: AuthKeys = Depends(get_api_keys)):
         if not file_name: return {"error": "file_name required", "findings": [], "obligations": []}
 
         try:
-            gemini_client = GeminiChatClient(api_key=keys.openai_key)  # openai_key slot holds Gemini key
+            groq_client = GroqChatClient(api_key=keys.openai_key)  # openai_key slot holds Groq key
         except Exception as e:
-            print(f"[AUDIT] Gemini client unavailable; using fallback audit: {e}")
-            gemini_client = None
+            print(f"[AUDIT] Groq client unavailable; using fallback audit: {e}")
+            groq_client = None
 
         try:
             pc    = Pinecone(api_key=keys.pinecone_key)
@@ -661,7 +657,7 @@ async def start_audit(request: Request, keys: AuthKeys = Depends(get_api_keys)):
             index = None
 
         if index:
-            report = run_full_audit(file_name, gemini_client=gemini_client, pinecone_index=index, user_id=user_id)
+            report = run_full_audit(file_name, gemini_client=groq_client, pinecone_index=index, user_id=user_id)
         else:
             report = _fallback_audit(
                 _context_from_json_map(file_name),
@@ -748,8 +744,8 @@ async def start_migration(
     keys: AuthKeys = Depends(get_api_keys),
 ):
     if not files: raise HTTPException(status_code=422, detail="No files")
-    if not keys.openai_key:  # openai_key slot holds Gemini key
-        raise HTTPException(status_code=401, detail="Gemini API key is missing. Configure GEMINI_API_KEY on the server.")
+    if not keys.openai_key:  # openai_key slot holds Groq key
+        raise HTTPException(status_code=401, detail="Groq API key is missing. Configure GROQ_API_KEY on the server.")
     if not keys.pinecone_key:
         raise HTTPException(status_code=401, detail="Pinecone API key is missing. Add it in settings or configure PINECONE_API_KEY on the server.")
     if not keys.azure_key or not keys.azure_endpoint:
@@ -797,8 +793,8 @@ async def start_migration(
 
         async def run_entity_extraction():
             try:
-                gemini_client = GeminiChatClient(api_key=keys.openai_key)
-                processor = UniversalProcessor(gemini_client, None, None)
+                groq_client = GroqChatClient(api_key=keys.openai_key)
+                processor = UniversalProcessor(groq_client, None, None)
                 await processor.process_batch(task_id, file_names, user_id)
             except Exception as e:
                 print(f"[UPLOAD] Entity extraction skipped for task {task_id}: {e}", flush=True)

@@ -1,16 +1,15 @@
 import os
-# Wipe it completely out of system memory immediately
+# Remove any cached Google/Gemini keys from environment
 os.environ.pop("GOOGLE_API_KEY", None)
 os.environ.pop("GEMINI_API_KEY", None)
 
-# Force the system key to match our working REST token from .env
-# If your code uses dotenv, manually load it here first
+# Load .env and activate Groq
 from dotenv import load_dotenv
 load_dotenv()
 
-working_key = os.getenv("GEMINI_API_KEY", "")
-os.environ["GOOGLE_API_KEY"] = working_key
-os.environ["GEMINI_API_KEY"] = working_key
+groq_key = os.getenv("GROQ_API_KEY", "")
+if groq_key:
+    os.environ["GROQ_API_KEY"] = groq_key
 
 import asyncio
 import json
@@ -18,8 +17,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
 
-
-load_dotenv()
 
 GEMINI_EVAL_MODEL = os.getenv("GEMINI_EVAL_MODEL", "gemini-3.1-flash-lite")
 LIVE_EVAL_MODEL = "gemini-3.1-flash-lite"

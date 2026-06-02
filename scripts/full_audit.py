@@ -1,15 +1,21 @@
-# scripts/full_audit.py
-# Multi-Agent Orchestration: Miner → Judge → Clerk
-# Migrated from OpenAI (gpt-4o / text-embedding-3-small)
-#             to Gemini (gemini-2.5-pro-preview / text-embedding-004)
-
 import os
+# Clean environment: remove Gemini keys, activate Groq
+os.environ.pop("GOOGLE_API_KEY", None)
+os.environ.pop("GEMINI_API_KEY", None)
+
+from dotenv import load_dotenv
+load_dotenv()
+
+groq_key = os.getenv("GROQ_API_KEY", "")
+if groq_key:
+    os.environ["GROQ_API_KEY"] = groq_key
+
 import json
 import re
 import time
 from pathlib import Path
 
-from scripts.gemini_client import GeminiChatClient
+from scripts.groq_client import GroqChatClient
 from scripts.processor import get_local_embedding
 from app.core.rag_engine import retrieve_dual_namespace
 
@@ -135,9 +141,9 @@ def _call_agent(system_prompt, user_content, agent_name="Agent", gemini_client=N
     if not gemini_client:
         raise RuntimeError(f"{agent_name}: Gemini client missing")
 
-    # Delegate retry logic to GeminiChatClient (has its own exponential backoff).
+    # Delegate retry logic to GroqChatClient (has its own exponential backoff).
     # We honour `attempts` here as an override if needed.
-    client = GeminiChatClient(max_retries=attempts) if not isinstance(gemini_client, GeminiChatClient) else gemini_client
+    client = GroqChatClient(max_retries=attempts) if not isinstance(gemini_client, GroqChatClient) else gemini_client
 
     try:
         return client.complete_json(system_prompt, user_content, agent_name)
@@ -321,14 +327,14 @@ def run_full_audit(target_file, gemini_client=None, pinecone_index=None,
     Parameters
     ----------
     target_file    : str   – PDF file name (used to locate JSON map / Pinecone filter)
-    gemini_client  : GeminiChatClient | None – injected by API; auto-created if None
+    gemini_client  : GroqChatClient | None – injected by API; auto-created if None
     pinecone_index : pinecone.Index  | None
     openai_client  : (deprecated) accepted but ignored for backwards compat
     """
     try:
         # Auto-initialise chat client when called standalone
         if gemini_client is None:
-            gemini_client = GeminiChatClient()
+            gemini_client = GroqChatClient()
 
         if not pinecone_index:
             return {"error": "Pinecone index not initialised"}
