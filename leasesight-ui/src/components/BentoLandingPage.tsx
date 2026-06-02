@@ -7,7 +7,7 @@ import {
   ArrowRight, Sparkles, Cpu, Layers, 
   Search, ShieldCheck, Zap
 } from 'lucide-react';
-import { useAuth } from '@clerk/nextjs';
+import { useAuth } from '@clerk/react';
 
 const BentoCard = ({ 
   title, 

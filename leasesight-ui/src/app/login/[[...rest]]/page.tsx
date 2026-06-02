@@ -1,6 +1,6 @@
 'use client';
 
-import { SignIn } from '@clerk/nextjs';
+import { SignIn } from '@clerk/react';
 import { BrandLogo } from '@/components/BrandLogo';
 
 export default function LoginPage() {
