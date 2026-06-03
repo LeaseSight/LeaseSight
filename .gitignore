@@ -1,34 +1,12 @@
-# Secrets (never commit)
+# Sensitive Keys & Secrets
 .env
 .env.production
 .env.local
 leasesight-ui/.env.local
-
-# Large/Private Data
-data/
-"Imp Terms/"
+*.pem
 
 # Python Environment
 venv/
-__pycache__/
-*.pyc
-
-# System files
-.DS_Store
-
-"Imp Terms/"
-
-# Sensitive Keys
-.env
-.env.local
-*.pem
-
-# Databases & Large Data
-leasesight.db
-data/raw_pdfs/
-data/json_maps/
-
-# Python / Virtual Envs
 .venv/
 env/
 __pycache__/
@@ -36,9 +14,15 @@ __pycache__/
 
 # Node / Next.js
 node_modules/
-.next/
-out/
+leasesight-ui/node_modules/
+leasesight-ui/.next/
+leasesight-ui/out/
 
-# System Files
+# Databases & Large Data
+leasesight.db
+data/
+"Imp Terms/"
+
+# System files
 .DS_Store
 Thumbs.db

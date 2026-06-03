@@ -1,90 +1,94 @@
-with open('leasesight-ui/src/components/LeftPane.tsx', 'r', encoding='utf-8') as f:
-    content = f.read()
+import os
+import shutil
+import re
 
-import_target = "import { AuditSkeleton } from './AuditSkeleton';"
-content = content.replace(import_target, "import { AuditSkeleton } from './AuditSkeleton';\nimport { FileUploadStatus } from './FileUploadStatus';")
+BASE_DIR = r"C:\Users\zain\OneDrive\Desktop\LeaseSight"
 
-state_target = "  const [isUploading, setIsUploading] = useState(false);"
-content = content.replace(state_target, "  const [isUploading, setIsUploading] = useState(false);\n  const [pipelineStatus, setPipelineStatus] = useState<string | null>(null);\n  const [pipelineError, setPipelineError] = useState<string | undefined>();")
+# Define directories
+dirs_to_create = [
+    os.path.join(BASE_DIR, "api", "core"),
+    os.path.join(BASE_DIR, "api", "services"),
+    os.path.join(BASE_DIR, "api", "database"),
+]
 
-upload_target = """  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setIsUploading(true);
-    try {
-      const res = await api.upload(file);
-      const docsRes = await api.documents();
-      setDocuments(docsRes.documents ?? []);
-      onSelectDoc(res.file_name ?? '');
-    } catch (error) {
-      console.error('Upload failed:', error);
-      showErrorToast(error, 'Upload Failed');
-    } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  };"""
+for d in dirs_to_create:
+    os.makedirs(d, exist_ok=True)
 
-new_upload = """  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setIsUploading(true);
-    setPipelineStatus(null);
-    setPipelineError(undefined);
-    try {
-      const res = await api.upload(file);
-      const docsRes = await api.documents();
-      setDocuments(docsRes.documents ?? []);
-      onSelectDoc(res.file_name ?? '');
+def safe_move(src, dst):
+    if os.path.exists(src):
+        if os.path.exists(dst):
+            os.remove(dst)
+        shutil.move(src, dst)
+        print(f"Moved {src} -> {dst}")
+    else:
+        print(f"Warning: {src} does not exist.")
 
-      if (res.live_evaluation?.status === 'QUEUED') {
-        setPipelineStatus('QUEUED');
-        const pollInterval = setInterval(async () => {
-          try {
-            const statusRes = await api.checkLiveEvaluation(res.file_name);
-            setPipelineStatus(statusRes.status);
-            
-            if (statusRes.status === 'COMPLETED') {
-              clearInterval(pollInterval);
-              const auditData = await api.audit(res.file_name);
-              onAuditComplete(auditData);
-            } else if (statusRes.status === 'FAILED') {
-              clearInterval(pollInterval);
-              setPipelineError('Extraction failed.');
-            }
-          } catch (err) {
-            clearInterval(pollInterval);
-            setPipelineStatus('FAILED');
-          }
-        }, 3000);
-      }
-    } catch (error) {
-      console.error('Upload failed:', error);
-      showErrorToast(error, 'Upload Failed');
-    } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  };"""
+# 1. Move app/core/* to api/core/
+safe_move(os.path.join(BASE_DIR, "app", "core", "evaluator.py"), os.path.join(BASE_DIR, "api", "core", "evaluator.py"))
+safe_move(os.path.join(BASE_DIR, "app", "core", "rag_engine.py"), os.path.join(BASE_DIR, "api", "core", "rag_engine.py"))
+safe_move(os.path.join(BASE_DIR, "app", "core", "__init__.py"), os.path.join(BASE_DIR, "api", "core", "__init__.py"))
 
-content = content.replace(upload_target, new_upload)
+# 2. Move database scripts to api/database/
+db_scripts = ["database_manager.py", "index_to_pinecone.py", "recreate_pinecone_index.py", "reindex_pinecone.py"]
+for f in db_scripts:
+    safe_move(os.path.join(BASE_DIR, "scripts", f), os.path.join(BASE_DIR, "api", "database", f))
 
-jsx_target = """      </div>
+# 3. Move services scripts to api/services/
+svc_scripts = ["full_audit.py", "query_engine.py", "groq_client.py", "gemini_client.py", "analytics.py", "report_generator.py", "visual_anchor.py", "extract_spatial_data.py", "audit_files.py"]
+for f in svc_scripts:
+    safe_move(os.path.join(BASE_DIR, "scripts", f), os.path.join(BASE_DIR, "api", "services", f))
 
-      {/* Scrollable Results Area */}"""
+# 4. Rename processor files
+safe_move(os.path.join(BASE_DIR, "scripts", "processor.py"), os.path.join(BASE_DIR, "api", "services", "document_processor.py"))
+safe_move(os.path.join(BASE_DIR, "api", "processor.py"), os.path.join(BASE_DIR, "api", "services", "universal_processor.py"))
 
-new_jsx = """      </div>
+# 5. Move app.py
+safe_move(os.path.join(BASE_DIR, "app.py"), os.path.join(BASE_DIR, "api", "legacy_streamlit_app.py"))
 
-      {/* File Upload Status */}
-      {pipelineStatus && (
-        <div className="px-4 pb-2">
-          <FileUploadStatus status={pipelineStatus} error={pipelineError} />
-        </div>
-      )}
+# Refactor logic
+def replace_in_file(filepath):
+    if not os.path.exists(filepath):
+        return
+    with open(filepath, "r", encoding="utf-8") as f:
+        content = f.read()
 
-      {/* Scrollable Results Area */}"""
+    original_content = content
 
-content = content.replace(jsx_target, new_jsx)
+    # Replace absolute imports
+    content = content.replace("from app.core.", "from api.core.")
+    content = content.replace("import app.core.", "import api.core.")
+    
+    for db_f in db_scripts:
+        mod_name = db_f.replace(".py", "")
+        content = content.replace(f"from scripts.{mod_name}", f"from api.database.{mod_name}")
+        content = content.replace(f"import scripts.{mod_name}", f"import api.database.{mod_name}")
 
-with open('leasesight-ui/src/components/LeftPane.tsx', 'w', encoding='utf-8') as f:
-    f.write(content)
+    for svc_f in svc_scripts:
+        mod_name = svc_f.replace(".py", "")
+        content = content.replace(f"from scripts.{mod_name}", f"from api.services.{mod_name}")
+        content = content.replace(f"import scripts.{mod_name}", f"import api.services.{mod_name}")
+
+    # Processors
+    content = content.replace("from scripts.processor ", "from api.services.document_processor ")
+    content = content.replace("import scripts.processor", "import api.services.document_processor")
+    content = content.replace("from api.processor ", "from api.services.universal_processor ")
+    content = content.replace("import api.processor", "import api.services.universal_processor")
+
+    # Catch-all for any remaining scripts
+    content = content.replace("from scripts ", "from api.services ")
+    content = content.replace("import scripts", "import api.services")
+
+    if content != original_content:
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+        print(f"Refactored imports in {filepath}")
+
+# Walk through all python files in the repo (except venv and UI)
+for root, dirs, files in os.walk(BASE_DIR):
+    if "venv" in root or "leasesight-ui" in root or ".git" in root or "__pycache__" in root:
+        continue
+    for file in files:
+        if file.endswith(".py"):
+            replace_in_file(os.path.join(root, file))
+
+print("Refactoring complete.")

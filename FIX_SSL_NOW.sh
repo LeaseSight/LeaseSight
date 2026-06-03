@@ -51,12 +51,21 @@ sudo tee /etc/caddy/Caddyfile > /dev/null << 'CADDY_CONFIG'
 }
 
 api.leasesights.tech {
-    reverse_proxy localhost:8080 {
+    # Point directly to your permanent ngrok static tunnel endpoint
+    reverse_proxy https://thistlelike-unguentary-ceola.ngrok-free.dev {
+        header_up Host {upstream_hostport}
+
         header_down -Access-Control-Allow-Origin
         header_down -Access-Control-Allow-Methods
         header_down -Access-Control-Allow-Headers
         header_down -Access-Control-Allow-Credentials
         header_down -Access-Control-Allow-Expose-Headers
+
+        transport http {
+            read_timeout 60s
+            write_timeout 60s
+            dial_timeout 10s
+        }
     }
 
     @allowed_origin {

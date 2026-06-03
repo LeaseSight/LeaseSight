@@ -1,5 +1,5 @@
 import os
-# Remove any cached Google/Gemini keys from environment
+# Remove any cached Google/Gemini keys — evaluation now runs via Groq
 os.environ.pop("GOOGLE_API_KEY", None)
 os.environ.pop("GEMINI_API_KEY", None)
 
@@ -15,11 +15,63 @@ import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
+# ---------------------------------------------------------------------------
+# Groq → DeepEval bridge
+# ---------------------------------------------------------------------------
 
-GEMINI_EVAL_MODEL = os.getenv("GEMINI_EVAL_MODEL", "gemini-3.1-flash-lite")
-LIVE_EVAL_MODEL = "gemini-3.1-flash-lite"
+GROQ_EVAL_MODEL = os.getenv("GROQ_EVAL_MODEL", "llama-3.3-70b-versatile")
+LIVE_EVAL_MODEL = GROQ_EVAL_MODEL  # kept for backward-compat references
+
+try:
+    from groq import Groq as _GroqClient
+    from deepeval.models.base_model import DeepEvalBaseLLM
+
+    class GroqDeepEvalWrapper(DeepEvalBaseLLM):
+        """
+        Thin adapter that exposes a Groq Llama-3 model to DeepEval metrics.
+        Satisfies the three abstract methods required by DeepEvalBaseLLM v3.7+:
+          load_model / generate / a_generate / get_model_name
+        """
+
+        def __init__(self, model_name: str = GROQ_EVAL_MODEL):
+            # Call parent with model_name so self.model_name is set before load_model
+            self._groq_model_name = model_name
+            self._client: Optional[_GroqClient] = None
+            super().__init__(model_name=model_name)
+
+        def load_model(self, *args, **kwargs):
+            api_key = os.getenv("GROQ_API_KEY")
+            if not api_key:
+                raise RuntimeError(
+                    "GROQ_API_KEY is required to run DeepEval evaluations via Groq."
+                )
+            self._client = _GroqClient(api_key=api_key)
+            return self._client
+
+        def generate(self, prompt: str, *args, **kwargs) -> str:
+            if self._client is None:
+                self.load_model()
+            completion = self._client.chat.completions.create(
+                model=self._groq_model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=2048,
+            )
+            return completion.choices[0].message.content or ""
+
+        async def a_generate(self, prompt: str, *args, **kwargs) -> str:
+            # DeepEval calls this in async contexts; Groq SDK is sync so we defer to thread
+            return await asyncio.to_thread(self.generate, prompt)
+
+        def get_model_name(self, *args, **kwargs) -> str:
+            return f"Groq/{self._groq_model_name}"
+
+    _GROQ_DEEPEVAL_AVAILABLE = True
+except ImportError as _groq_import_err:
+    _GROQ_DEEPEVAL_AVAILABLE = False
+    _groq_import_err_msg = str(_groq_import_err)
 BASE_DIR = Path(__file__).resolve().parents[2]
 BENCHMARKS_PATH = BASE_DIR / "data" / "benchmarks.json"
 FAILED_CASES_PATH = BASE_DIR / "data" / "failed_cases.json"
@@ -106,31 +158,34 @@ def _load_deepeval_dependencies() -> Dict[str, Any]:
     except ImportError:
         from deepeval.metrics import AnswerRelevancyMetric as AnswerRelevanceMetric
 
-    from deepeval.models import GeminiModel
     from deepeval.test_case import LLMTestCase
 
     return {
         "ContextualRecallMetric": ContextualRecallMetric,
         "FaithfulnessMetric": FaithfulnessMetric,
         "AnswerRelevanceMetric": AnswerRelevanceMetric,
-        "GeminiModel": GeminiModel,
         "LLMTestCase": LLMTestCase,
     }
 
 
-def _configure_gemini_model(deps: Dict[str, Any], model_name: str = GEMINI_EVAL_MODEL) -> Any:
-    api_key = os.getenv("GEMINI_API_KEY")
+def _configure_eval_model(model_name: str = GROQ_EVAL_MODEL) -> Any:
+    """Return a DeepEval-compatible model backed by Groq Llama-3."""
+    if not _GROQ_DEEPEVAL_AVAILABLE:
+        raise RuntimeError(
+            f"groq or deepeval package is missing. Run: pip install groq deepeval\n"
+            f"Import error was: {_groq_import_err_msg}"
+        )
+    api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        raise RuntimeError("GEMINI_API_KEY is required to run DeepEval evaluations.")
+        raise RuntimeError(
+            "GROQ_API_KEY is required to run DeepEval evaluations via Groq. "
+            "Add it to your .env file."
+        )
+    return GroqDeepEvalWrapper(model_name=model_name)
 
-    os.environ.pop("GOOGLE_API_KEY", None)
-    os.environ["GOOGLE_API_KEY"] = api_key
-    os.environ["GEMINI_API_KEY"] = api_key
-    return deps["GeminiModel"](
-        model_name=model_name,
-        api_key=api_key,
-        temperature=0,
-    )
+
+# Keep old name as alias so any leftover internal callers don't break
+_configure_gemini_model = _configure_eval_model
 
 
 def _build_metrics(model: Any, deps: Dict[str, Any]):
@@ -223,7 +278,7 @@ def _append_failed_case(
 
 def _run_evaluation_sync() -> Dict[str, Any]:
     deps = _load_deepeval_dependencies()
-    model = _configure_gemini_model(deps)
+    model = _configure_eval_model()
     benchmark = _load_benchmark_config()
     totals = {
         "faithfulness": 0.0,
@@ -295,7 +350,7 @@ def evaluate_live_document(
             actual_output=generated_output,
             retrieval_context=retrieved_chunks or [],
         )
-        model = _configure_gemini_model(deps, model_name=LIVE_EVAL_MODEL)
+        model = _configure_eval_model(model_name=LIVE_EVAL_MODEL)
         metrics = {
             "faithfulness": deps["FaithfulnessMetric"](
                 threshold=0.6,

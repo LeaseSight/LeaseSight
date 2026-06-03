@@ -174,10 +174,10 @@ async def startup_checks():
 async def health():
     return {
         "status": "ULTRA_HEALTHY",
-        "version": "2.0.0-gemini",
-        "last_sync": "2026-05-31 00:00:00",
-        "llm_backend": "gemini-2.5-pro-preview",
-        "embedding_model": "text-embedding-004",
+        "version": "2.1.0-groq",
+        "last_sync": "2026-06-03 00:00:00",
+        "llm_backend": "groq/llama-3.3-70b-versatile",
+        "embedding_model": "all-mpnet-base-v2 (local)",
         "embedding_dim": 768,
     }
 

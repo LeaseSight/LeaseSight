@@ -13,14 +13,23 @@ echo ""
 echo "[1/5] Updating Caddy configuration..."
 sudo tee /etc/caddy/Caddyfile > /dev/null << 'EOF'
 api.leasesights.tech {
-    # STRIP all incoming CORS headers from backend (to remove wildcard)
-    # Then set ONLY the correct ones
-    reverse_proxy localhost:8080 {
+    # Point directly to your permanent ngrok static tunnel endpoint
+    reverse_proxy https://thistlelike-unguentary-ceola.ngrok-free.dev {
+        header_up Host {upstream_hostport}
+
+        # STRIP all incoming CORS headers from backend (to remove wildcard)
+        # Then set ONLY the correct ones
         header_down -Access-Control-Allow-Origin
         header_down -Access-Control-Allow-Methods
         header_down -Access-Control-Allow-Headers
         header_down -Access-Control-Allow-Credentials
         header_down -Access-Control-Expose-Headers
+
+        transport http {
+            read_timeout 60s
+            write_timeout 60s
+            dial_timeout 10s
+        }
     }
 
     # NOW set fresh CORS headers - single source of truth

@@ -8,18 +8,20 @@ deepeval==3.7.0
 pandas==2.3.2
 numpy==2.3.3
 # openai==2.33.0  # removed – migrated to Gemini
+# google-generativeai  # removed – evaluation migrated to Groq
+# google-genai         # removed – evaluation migrated to Groq
+# google-api-core      # removed – evaluation migrated to Groq
+groq>=1.0.0
 pinecone==8.1.2
+
 pinecone-plugin-assistant==3.0.3
 azure-ai-formrecognizer==3.3.0
 azure-core==1.39.0
 langchain==1.2.0
 langchain-community==0.4.1
 langchain-core==1.2.5
-google-generativeai>=0.8.0
-google-genai>=1.0.0
-google-api-core>=2.15.0
 sentence-transformers>=3.0.0
-torch
+torch==2.11.0
 chromadb==1.4.0
 pypdf==6.5.0
 python-docx==1.2.0
