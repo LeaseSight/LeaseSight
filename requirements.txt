@@ -1,34 +1,124 @@
-fastapi==0.128.5
-uvicorn==0.40.0
-python-multipart==0.0.27
-python-dotenv==1.2.1
-pydantic==2.12.5
-pydantic-settings==2.12.0
-deepeval==3.7.0
-pandas==2.3.2
-numpy==2.3.3
-# openai==2.33.0  # removed – migrated to Gemini
-# google-generativeai  # removed – evaluation migrated to Groq
-# google-genai         # removed – evaluation migrated to Groq
-# google-api-core      # removed – evaluation migrated to Groq
-groq>=1.0.0
-pinecone==8.1.2
+# ============================================================
+# LeaseSight – Python Backend Dependencies
+# Install with: pip install -r requirements.txt
+#
+# Python version recommended: 3.11.x
+# ============================================================
 
-pinecone-plugin-assistant==3.0.3
+# -----------------------------------------------------------
+# Web Framework & Server
+# -----------------------------------------------------------
+fastapi==0.115.12
+uvicorn==0.34.3
+python-multipart==0.0.20
+
+# -----------------------------------------------------------
+# Configuration & Environment
+# -----------------------------------------------------------
+python-dotenv==1.0.1
+
+# -----------------------------------------------------------
+# Data Validation
+# -----------------------------------------------------------
+pydantic==2.11.5
+pydantic-settings==2.9.1
+
+# -----------------------------------------------------------
+# Streamlit UI (app.py – legacy desktop interface)
+# -----------------------------------------------------------
+streamlit==1.45.1
+streamlit-pdf-viewer==0.0.22
+
+# -----------------------------------------------------------
+# Data & Analytics
+# -----------------------------------------------------------
+pandas==2.2.3
+numpy==1.26.4
+plotly==6.1.2
+scikit-learn==1.6.1
+
+# -----------------------------------------------------------
+# LLM & AI Clients
+# -----------------------------------------------------------
+groq>=1.0.0
+
+# -----------------------------------------------------------
+# RAG Evaluation (DeepEval via Groq)
+# -----------------------------------------------------------
+deepeval==2.6.5
+
+# -----------------------------------------------------------
+# Vector Database
+# -----------------------------------------------------------
+pinecone==5.4.2
+pinecone-plugin-assistant==1.4.0
+
+# -----------------------------------------------------------
+# Azure Document Intelligence (OCR / Layout Analysis)
+# -----------------------------------------------------------
 azure-ai-formrecognizer==3.3.0
-azure-core==1.39.0
-langchain==1.2.0
-langchain-community==0.4.1
-langchain-core==1.2.5
+azure-core==1.34.0
+
+# -----------------------------------------------------------
+# LangChain (used in some scripts)
+# -----------------------------------------------------------
+langchain==0.3.25
+langchain-community==0.3.24
+langchain-core==0.3.63
+
+# -----------------------------------------------------------
+# Local Embedding Model (sentence-transformers / all-mpnet-base-v2)
+# -----------------------------------------------------------
 sentence-transformers>=3.0.0
-torch==2.11.0
-chromadb==1.4.0
-pypdf==6.5.0
-python-docx==1.2.0
+
+# NOTE: PyTorch – choose ONE of the lines below based on your
+# hardware, then uncomment it (or let sentence-transformers
+# pull a compatible CPU version automatically).
+#
+# CPU only (smaller download, works everywhere):
+# torch==2.3.1
+#
+# CUDA 11.8 (NVIDIA GPU):
+# torch==2.3.1+cu118 --extra-index-url https://download.pytorch.org/whl/cu118
+#
+# If you leave both commented out, sentence-transformers will
+# install a compatible CPU-only torch automatically.
+
+# -----------------------------------------------------------
+# Vector Store (ChromaDB – local fallback option)
+# -----------------------------------------------------------
+chromadb==0.6.3
+
+# -----------------------------------------------------------
+# PDF Processing
+# -----------------------------------------------------------
+pypdf==5.4.0
+
+# -----------------------------------------------------------
+# Office Document Processing
+# -----------------------------------------------------------
+python-docx==1.1.2
 openpyxl==3.1.5
-xlsxwriter==3.2.9
-requests==2.32.5
+xlsxwriter==3.2.3
+
+# -----------------------------------------------------------
+# PDF Report Generation (ReportLab)
+# -----------------------------------------------------------
+reportlab==4.2.5
+
+# -----------------------------------------------------------
+# HTTP Clients
+# -----------------------------------------------------------
+requests==2.32.3
 httpx==0.28.1
+
+# -----------------------------------------------------------
+# Utilities
+# -----------------------------------------------------------
 python-dateutil==2.9.0.post0
 tqdm==4.67.1
-reportlab==4.3.1
+
+# -----------------------------------------------------------
+# OpenAI (kept for legacy app.py compatibility)
+# -----------------------------------------------------------
+openai>=1.0.0
